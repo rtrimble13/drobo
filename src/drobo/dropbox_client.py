@@ -1,0 +1,169 @@
+"""
+Dropbox API client for drobo.
+"""
+
+import logging
+from typing import List
+
+import dropbox
+from dropbox.exceptions import ApiError, AuthError
+from dropbox.files import FileMetadata, FolderMetadata
+
+from drobo.config import AppConfig, ConfigManager
+
+logger = logging.getLogger(__name__)
+
+
+class DropboxClient:
+    """Dropbox API client with token management."""
+
+    def __init__(self, app_config: AppConfig, config_manager: ConfigManager) -> None:
+        self.app_config = app_config
+        self.config_manager = config_manager
+        self._client = None
+        self._initialize_client()
+
+    def _initialize_client(self) -> None:
+        """Initialize the Dropbox client."""
+        if not self.app_config.has_valid_tokens():
+            raise ValueError(f"App '{self.app_config.name}' has no valid access tokens")
+
+        self._client = dropbox.Dropbox(
+            oauth2_access_token=self.app_config.access_token,
+            app_key=self.app_config.app_key,
+            app_secret=self.app_config.app_secret,
+        )
+
+        logger.debug(f"Initialized Dropbox client for app '{self.app_config.name}'")
+
+    def _handle_auth_error(self, error: AuthError) -> None:
+        """Handle authentication errors and attempt token refresh."""
+        logger.warning(f"Authentication error: {error}")
+
+        if self.app_config.refresh_token:
+            try:
+                self.refresh_access_token()
+                logger.info("Successfully refreshed access token")
+            except Exception as e:
+                logger.error(f"Failed to refresh token: {e}")
+                raise AuthError("Token refresh failed") from e
+        else:
+            raise AuthError("No refresh token available")
+
+    def refresh_access_token(self) -> None:
+        """Refresh the access token using the refresh token."""
+        if not self.app_config.refresh_token:
+            raise ValueError("No refresh token available")
+
+        try:
+            # Create a temporary client for token refresh
+            temp_client = dropbox.Dropbox(
+                app_key=self.app_config.app_key, app_secret=self.app_config.app_secret
+            )
+
+            # Refresh the token
+            result = temp_client.refresh_access_token(self.app_config.refresh_token)
+
+            # Update configuration
+            self.config_manager.save_app_tokens(
+                self.app_config.name, result.access_token, result.refresh_token
+            )
+
+            # Reinitialize client with new token
+            self._initialize_client()
+
+        except Exception as e:
+            logger.error(f"Token refresh failed: {e}")
+            raise
+
+    def list_folder(self, path: str = "") -> List[dict]:
+        """List contents of a folder."""
+        try:
+            result = self._client.files_list_folder(path)
+            items = []
+
+            for entry in result.entries:
+                item = {
+                    "name": entry.name,
+                    "path": entry.path_display,
+                    "type": "folder" if isinstance(entry, FolderMetadata) else "file",
+                }
+
+                if isinstance(entry, FileMetadata):
+                    item["size"] = entry.size
+                    item["modified"] = entry.client_modified
+
+                items.append(item)
+
+            return items
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            return self.list_folder(path)
+        except ApiError as e:
+            logger.error(f"API error listing folder '{path}': {e}")
+            raise
+
+    def download_file(self, remote_path: str, local_path: str) -> None:
+        """Download a file from Dropbox."""
+        try:
+            with open(local_path, "wb") as f:
+                metadata, response = self._client.files_download(remote_path)
+                f.write(response.content)
+
+            logger.info(f"Downloaded {remote_path} to {local_path}")
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            self.download_file(remote_path, local_path)
+        except ApiError as e:
+            logger.error(f"API error downloading file '{remote_path}': {e}")
+            raise
+
+    def upload_file(self, local_path: str, remote_path: str) -> None:
+        """Upload a file to Dropbox."""
+        try:
+            with open(local_path, "rb") as f:
+                self._client.files_upload(
+                    f.read(), remote_path, mode=dropbox.files.WriteMode.overwrite
+                )
+
+            logger.info(f"Uploaded {local_path} to {remote_path}")
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            self.upload_file(local_path, remote_path)
+        except ApiError as e:
+            logger.error(f"API error uploading file '{local_path}': {e}")
+            raise
+
+    def move_file(self, from_path: str, to_path: str) -> None:
+        """Move/rename a file or folder."""
+        try:
+            self._client.files_move_v2(from_path, to_path)
+            logger.info(f"Moved {from_path} to {to_path}")
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            self.move_file(from_path, to_path)
+        except ApiError as e:
+            logger.error(f"API error moving '{from_path}' to '{to_path}': {e}")
+            raise
+
+    def delete_file(self, path: str) -> None:
+        """Delete a file or folder."""
+        try:
+            self._client.files_delete_v2(path)
+            logger.info(f"Deleted {path}")
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            self.delete_file(path)
+        except ApiError as e:
+            logger.error(f"API error deleting '{path}': {e}")
+            raise
