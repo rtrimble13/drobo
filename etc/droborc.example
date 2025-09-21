@@ -1,0 +1,21 @@
+# Example drobo configuration file
+# Copy this to ~/.droborc and update with your Dropbox app credentials
+
+[apps.example]
+app_key = "your_dropbox_app_key_here"
+app_secret = "your_dropbox_app_secret_here"
+access_token = ""
+refresh_token = ""
+
+# You can define multiple apps
+[apps.work]
+app_key = "work_app_key"
+app_secret = "work_app_secret"
+access_token = "work_access_token"
+refresh_token = "work_refresh_token"
+
+[apps.personal]
+app_key = "personal_app_key"
+app_secret = "personal_app_secret"
+access_token = "personal_access_token"
+refresh_token = "personal_refresh_token"
