@@ -2,11 +2,7 @@
 Tests for drobo configuration management.
 """
 
-import tempfile
-from pathlib import Path
-
 import pytest
-import toml
 
 from drobo.config import AppConfig, ConfigManager
 
@@ -38,7 +34,9 @@ class TestAppConfig:
             # Missing app_secret
         }
 
-        with pytest.raises(ValueError, match="missing required app_key or app_secret"):
+        with pytest.raises(
+            ValueError, match="missing required app_key or app_secret"
+        ):
             AppConfig("test_app", config_data)
 
     def test_has_valid_tokens(self):
@@ -69,80 +67,65 @@ class TestAppConfig:
 class TestConfigManager:
     """Test ConfigManager class."""
 
-    def test_config_manager_creation(self):
+    def test_config_manager_creation(self, tmp_path):
         """Test creating a ConfigManager instance."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / ".droborc"
-            ConfigManager(config_path)
+        config_path = tmp_path / ".droborc"
+        ConfigManager(config_path)
 
-            # Should create default config
-            assert config_path.exists()
+        # Should create default config
+        assert config_path.exists()
 
-    def test_load_existing_config(self):
+    def test_load_existing_config(self, tmp_path):
         """Test loading an existing config file."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / ".droborc"
+        config_path = tmp_path / ".droborc"
 
-            # Create test config
-            test_config = {
-                "apps": {
-                    "myapp": {
-                        "app_key": "test_key",
-                        "app_secret": "test_secret",
-                        "access_token": "test_token",
-                    }
-                }
-            }
+        # Create test config using configistate
+        from configistate import Config
 
-            with open(config_path, "w") as f:
-                toml.dump(test_config, f)
+        test_config = Config()
+        test_config.set("apps.myapp.app_key", "test_key")
+        test_config.set("apps.myapp.app_secret", "test_secret")
+        test_config.set("apps.myapp.access_token", "test_token")
+        test_config.save(config_path)
 
-            manager = ConfigManager(config_path)
-            app_config = manager.get_app_config("myapp")
+        manager = ConfigManager(config_path)
+        app_config = manager.get_app_config("myapp")
 
-            assert app_config is not None
-            assert app_config.name == "myapp"
-            assert app_config.app_key == "test_key"
+        assert app_config is not None
+        assert app_config.name == "myapp"
+        assert app_config.app_key == "test_key"
 
-    def test_get_nonexistent_app(self):
+    def test_get_nonexistent_app(self, tmp_path):
         """Test getting a non-existent app."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / ".droborc"
-            manager = ConfigManager(config_path)
+        config_path = tmp_path / ".droborc"
+        manager = ConfigManager(config_path)
 
-            app_config = manager.get_app_config("nonexistent")
-            assert app_config is None
+        app_config = manager.get_app_config("nonexistent")
+        assert app_config is None
 
-    def test_save_app_tokens(self):
+    def test_save_app_tokens(self, tmp_path):
         """Test saving app tokens."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / ".droborc"
+        config_path = tmp_path / ".droborc"
 
-            # Create test config
-            test_config = {
-                "apps": {
-                    "myapp": {
-                        "app_key": "test_key",
-                        "app_secret": "test_secret",
-                        "access_token": "old_token",
-                    }
-                }
-            }
+        # Create test config using configistate
+        from configistate import Config
 
-            with open(config_path, "w") as f:
-                toml.dump(test_config, f)
+        test_config = Config()
+        test_config.set("apps.myapp.app_key", "test_key")
+        test_config.set("apps.myapp.app_secret", "test_secret")
+        test_config.set("apps.myapp.access_token", "old_token")
+        test_config.save(config_path)
 
-            manager = ConfigManager(config_path)
-            manager.save_app_tokens("myapp", "new_token", "new_refresh")
+        manager = ConfigManager(config_path)
+        manager.save_app_tokens("myapp", "new_token", "new_refresh")
 
-            # Verify tokens were saved
-            app_config = manager.get_app_config("myapp")
-            assert app_config.access_token == "new_token"
-            assert app_config.refresh_token == "new_refresh"
+        # Verify tokens were saved
+        app_config = manager.get_app_config("myapp")
+        assert app_config.access_token == "new_token"
+        assert app_config.refresh_token == "new_refresh"
 
-            # Verify file was updated
-            with open(config_path, "r") as f:
-                saved_config = toml.load(f)
-
-            assert saved_config["apps"]["myapp"]["access_token"] == "new_token"
-            assert saved_config["apps"]["myapp"]["refresh_token"] == "new_refresh"
+        # Verify file was updated by loading it fresh
+        fresh_config = Config()
+        fresh_config.load(config_path)
+        assert fresh_config.get("apps.myapp.access_token") == "new_token"
+        assert fresh_config.get("apps.myapp.refresh_token") == "new_refresh"

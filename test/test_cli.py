@@ -2,8 +2,6 @@
 Tests for drobo CLI.
 """
 
-from unittest.mock import Mock, patch
-
 from click.testing import CliRunner
 
 from drobo.cli import cli
@@ -30,20 +28,22 @@ class TestCLI:
         assert "Drobo - A Dropbox CLI" in result.output
         assert "Usage: drobo <app name> <command> [options]" in result.output
 
-    @patch("drobo.cli.setup_logging")
-    def test_verbose_flag(self, mock_setup):
+    def test_verbose_flag(self, mocker):
         """Test --verbose flag."""
+        mock_setup = mocker.patch("drobo.cli.setup_logging")
         runner = CliRunner()
-        # Need to provide required arguments but expect it to fail due to missing config
+        # Need to provide required arguments but expect it to fail due to missing
+        # config
         runner.invoke(cli, ["--verbose", "test_app", "ls"])
         mock_setup.assert_called_once_with(True)
 
-    @patch("drobo.cli.ConfigManager")
-    @patch("drobo.cli.setup_commands")
-    def test_app_command_ls(self, mock_setup_commands, mock_config_manager):
+    def test_app_command_ls(self, mocker):
         """Test app command execution."""
         # Mock config manager
-        mock_manager = Mock()
+        mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
+        mock_setup_commands = mocker.patch("drobo.cli.setup_commands")
+
+        mock_manager = mocker.Mock()
         mock_config = AppConfig(
             "test_app",
             {
@@ -56,7 +56,7 @@ class TestCLI:
         mock_config_manager.return_value = mock_manager
 
         # Mock command handler
-        mock_handler = Mock()
+        mock_handler = mocker.Mock()
         mock_setup_commands.return_value = mock_handler
 
         runner = CliRunner()
@@ -65,10 +65,10 @@ class TestCLI:
         assert result.exit_code == 0
         mock_handler.ls.assert_called_once_with(("/",))
 
-    @patch("drobo.cli.ConfigManager")
-    def test_app_command_nonexistent_app(self, mock_config_manager):
+    def test_app_command_nonexistent_app(self, mocker):
         """Test app command with non-existent app."""
-        mock_manager = Mock()
+        mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
+        mock_manager = mocker.Mock()
         mock_manager.get_app_config.return_value = None
         mock_config_manager.return_value = mock_manager
 
