@@ -77,6 +77,12 @@ make fmt
 # Build package
 make build
 
+# Build documentation
+make doc
+
+# Create distribution
+make dist
+
 # Clean build artifacts
 make clean
 ```
