@@ -25,7 +25,7 @@ requires-python = ">=3.8"
 dependencies = [
     "click>=8.0.0",
     "dropbox>=11.0.0",
-    "toml>=0.10.0",
+    "configistate>=0.1.0"
 ]
 
 [project.optional-dependencies]
@@ -48,7 +48,7 @@ Repository = "https://github.com/rtrimble13/drobo"
 where = ["src"]
 
 [tool.black]
-line-length = 88
+line-length = 80
 target-version = ["py38"]
 
 [tool.isort]
