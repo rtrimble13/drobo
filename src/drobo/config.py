@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional
 
-import toml
+from configistate import Config
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,9 @@ class AppConfig:
         self.refresh_token = config_data.get("refresh_token")
 
         if not all([self.app_key, self.app_secret]):
-            raise ValueError(f"App '{name}' missing required app_key or app_secret")
+            raise ValueError(
+                f"App '{name}' missing required app_key or app_secret"
+            )
 
         # Check for placeholder values
         if self.app_key == "your_dropbox_app_key_here":
@@ -35,7 +37,9 @@ class AppConfig:
         """Check if the app has valid access tokens."""
         return bool(self.access_token)
 
-    def update_tokens(self, access_token: str, refresh_token: str = None) -> None:
+    def update_tokens(
+        self, access_token: str, refresh_token: str = None
+    ) -> None:
         """Update the access and refresh tokens."""
         self.access_token = access_token
         if refresh_token:
@@ -43,10 +47,14 @@ class AppConfig:
 
 
 class ConfigManager:
-    """Manages drobo configuration."""
+    """Manages drobo configuration using configistate.Config."""
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
         self.config_path = config_path or Path.home() / ".droborc"
+        # Ensure config_path is a Path object
+        if not isinstance(self.config_path, Path):
+            self.config_path = Path(self.config_path)
+        self._config = Config()
         self._apps = {}
         self._load_config()
 
@@ -59,11 +67,10 @@ class ConfigManager:
             return self._load_config()
 
         try:
-            with open(self.config_path, "r") as f:
-                config_data = toml.load(f)
+            self._config.load(self.config_path)
 
             # Load apps from config
-            apps_config = config_data.get("apps", {})
+            apps_config = self._config.get("apps", {})
             for app_name, app_data in apps_config.items():
                 try:
                     self._apps[app_name] = AppConfig(app_name, app_data)
@@ -79,20 +86,16 @@ class ConfigManager:
 
     def _create_default_config(self) -> None:
         """Create a default configuration file."""
-        default_config = {
-            "apps": {
-                "example": {
-                    "app_key": "your_dropbox_app_key_here",
-                    "app_secret": "your_dropbox_app_secret_here",
-                    "access_token": "",
-                    "refresh_token": "",
-                }
-            }
-        }
+        # Set default configuration using configistate
+        self._config.set("apps.example.app_key", "your_dropbox_app_key_here")
+        self._config.set(
+            "apps.example.app_secret", "your_dropbox_app_secret_here"
+        )
+        self._config.set("apps.example.access_token", "")
+        self._config.set("apps.example.refresh_token", "")
 
         try:
-            with open(self.config_path, "w") as f:
-                toml.dump(default_config, f)
+            self._config.save(self.config_path)
             logger.info(f"Created default config at {self.config_path}")
         except Exception as e:
             logger.error(f"Failed to create default config: {e}")
@@ -116,18 +119,15 @@ class ConfigManager:
         # Update in memory
         self._apps[app_name].update_tokens(access_token, refresh_token)
 
-        # Update file
+        # Update configuration using configistate
         try:
-            with open(self.config_path, "r") as f:
-                config_data = toml.load(f)
-
-            config_data["apps"][app_name]["access_token"] = access_token
+            self._config.set(f"apps.{app_name}.access_token", access_token)
             if refresh_token:
-                config_data["apps"][app_name]["refresh_token"] = refresh_token
+                self._config.set(
+                    f"apps.{app_name}.refresh_token", refresh_token
+                )
 
-            with open(self.config_path, "w") as f:
-                toml.dump(config_data, f)
-
+            self._config.save(self.config_path)
             logger.info(f"Updated tokens for app '{app_name}'")
 
         except Exception as e:
