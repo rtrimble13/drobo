@@ -64,7 +64,9 @@ def cli(app_name: str, command: str, args: tuple, verbose: bool) -> None:
         app_config = config_manager.get_app_config(app_name)
 
         if not app_config:
-            click.echo(f"Error: App '{app_name}' not found in .droborc", err=True)
+            click.echo(
+                f"Error: App '{app_name}' not found in .droborc", err=True
+            )
             sys.exit(1)
 
         # Setup the command handler

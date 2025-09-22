@@ -40,15 +40,17 @@ class CommandHandler:
             else:
                 path = arg
 
-        # Ensure path starts with /
-        if not path.startswith("/"):
-            path = "/" + path
+        # Ensure path does not start with /
+        if path.startswith("/") and len(path) == 1:
+            path = ""
 
         try:
             items = self.client.list_folder(path)
 
             if not show_hidden:
-                items = [item for item in items if not item["name"].startswith(".")]
+                items = [
+                    item for item in items if not item["name"].startswith(".")
+                ]
 
             if long_format:
                 self._print_long_format(items)
@@ -104,15 +106,21 @@ class CommandHandler:
             if os.path.exists(source):
                 # Local to remote
                 remote_dest = (
-                    destination if destination.startswith("/") else "/" + destination
+                    destination
+                    if destination.startswith("/")
+                    else "/" + destination
                 )
                 self.client.upload_file(source, remote_dest)
                 os.remove(source)  # Remove local file after upload
             else:
                 # Remote to remote
-                remote_source = source if source.startswith("/") else "/" + source
+                remote_source = (
+                    source if source.startswith("/") else "/" + source
+                )
                 remote_dest = (
-                    destination if destination.startswith("/") else "/" + destination
+                    destination
+                    if destination.startswith("/")
+                    else "/" + destination
                 )
                 self.client.move_file(remote_source, remote_dest)
 
@@ -171,7 +179,9 @@ class CommandHandler:
                 modified = item.get("modified", "unknown")
                 if hasattr(modified, "strftime"):
                     modified = modified.strftime("%Y-%m-%d %H:%M")
-                click.echo(f"-rw-r--r--   - -   {size:>8}  {modified}  {item['name']}")
+                click.echo(
+                    f"-rw-r--r--   - -   {size:>8}  {modified}  {item['name']}"
+                )
 
     def _copy_file_or_folder(
         self, source: str, destination: str, recursive: bool = False
@@ -182,7 +192,9 @@ class CommandHandler:
             # Local to remote
             if os.path.isfile(source):
                 remote_dest = (
-                    destination if destination.startswith("/") else "/" + destination
+                    destination
+                    if destination.startswith("/")
+                    else "/" + destination
                 )
                 self.client.upload_file(source, remote_dest)
             elif os.path.isdir(source) and recursive:
@@ -203,18 +215,26 @@ class CommandHandler:
                 # Remote to local
                 self.client.download_file(remote_source, destination)
 
-    def _upload_directory_recursive(self, local_dir: str, remote_base: str) -> None:
+    def _upload_directory_recursive(
+        self, local_dir: str, remote_base: str
+    ) -> None:
         """Upload a directory recursively."""
         local_path = Path(local_dir)
-        remote_base = remote_base if remote_base.startswith("/") else "/" + remote_base
+        remote_base = (
+            remote_base if remote_base.startswith("/") else "/" + remote_base
+        )
 
         for item in local_path.rglob("*"):
             if item.is_file():
                 relative_path = item.relative_to(local_path)
-                remote_path = f"{remote_base}/{relative_path}".replace("\\", "/")
+                remote_path = f"{remote_base}/{relative_path}".replace(
+                    "\\", "/"
+                )
                 self.client.upload_file(str(item), remote_path)
 
 
-def setup_commands(app_config: AppConfig, verbose: bool = False) -> CommandHandler:
+def setup_commands(
+    app_config: AppConfig, verbose: bool = False
+) -> CommandHandler:
     """Setup and return a command handler."""
     return CommandHandler(app_config, verbose)

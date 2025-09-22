@@ -8,6 +8,7 @@ from typing import List
 import dropbox
 from dropbox.exceptions import ApiError, AuthError
 from dropbox.files import FileMetadata, FolderMetadata
+from dropbox.oauth import DropboxOAuth2FlowNoRedirect
 
 from drobo.config import AppConfig, ConfigManager
 
@@ -17,7 +18,10 @@ logger = logging.getLogger(__name__)
 class DropboxClient:
     """Dropbox API client with token management."""
 
-    def __init__(self, app_config: AppConfig, config_manager: ConfigManager) -> None:
+    def __init__(
+        self, app_config: AppConfig, config_manager: ConfigManager
+    ) -> None:
+        self._refresh_attempted = False
         self.app_config = app_config
         self.config_manager = config_manager
         self._client = None
@@ -26,54 +30,83 @@ class DropboxClient:
     def _initialize_client(self) -> None:
         """Initialize the Dropbox client."""
         if not self.app_config.has_valid_tokens():
-            raise ValueError(f"App '{self.app_config.name}' has no valid access tokens")
-
+            raise ValueError(
+                f"App '{self.app_config.name}' has no valid access tokens"
+            )
+        
         self._client = dropbox.Dropbox(
             oauth2_access_token=self.app_config.access_token,
             app_key=self.app_config.app_key,
             app_secret=self.app_config.app_secret,
+            oauth2_refresh_token=self.app_config.refresh_token
         )
 
-        logger.debug(f"Initialized Dropbox client for app '{self.app_config.name}'")
+        logger.debug(
+            f"Initialized Dropbox client for app '{self.app_config.name}'"
+        )
 
     def _handle_auth_error(self, error: AuthError) -> None:
         """Handle authentication errors and attempt token refresh."""
         logger.warning(f"Authentication error: {error}")
 
-        if self.app_config.refresh_token:
+        if error.error.is_expired_access_token() \
+            and not self._refresh_attempted:
             try:
                 self.refresh_access_token()
-                logger.info("Successfully refreshed access token")
+                self.save_tokens()
+                self._initialize_client()
             except Exception as e:
                 logger.error(f"Failed to refresh token: {e}")
                 raise AuthError("Token refresh failed") from e
         else:
-            raise AuthError("No refresh token available")
+            raise error
 
     def refresh_access_token(self) -> None:
-        """Refresh the access token using the refresh token."""
-        if not self.app_config.refresh_token:
-            raise ValueError("No refresh token available")
-
+        """Refresh the access token using the OAuth2FlowNoRedirect."""
+        if not self.app_config.app_key:
+            raise ValueError("No app key available")
+        if not self.app_config.app_secret:
+            raise ValueError("No app secret available")
+        
+        self._refresh_attempted = True
+            
         try:
             # Create a temporary client for token refresh
-            temp_client = dropbox.Dropbox(
-                app_key=self.app_config.app_key, app_secret=self.app_config.app_secret
+            flow = DropboxOAuth2FlowNoRedirect(
+                self.app_config.app_key,
+                self.app_config.app_secret,
+                token_access_type="offline",
+                scope=["files.metadata.read", "files.content.read", "files.content.write"],
+                include_granted_scopes="user"
             )
 
-            # Refresh the token
-            result = temp_client.refresh_access_token(self.app_config.refresh_token)
+            auth_url = flow.start()
+            print("1. Go to: " + auth_url)
+            print("2. Click 'Allow', then paste the code here (You might have to log in).")
+            auth_code = input("Enter the code: ").strip()
 
-            # Update configuration
-            self.config_manager.save_app_tokens(
-                self.app_config.name, result.access_token, result.refresh_token
+            oauth_result = flow.finish(auth_code)
+            access_token = oauth_result.access_token
+            refresh_token = oauth_result.refresh_token
+            self.app_config.update_tokens(
+                access_token, refresh_token
             )
-
-            # Reinitialize client with new token
-            self._initialize_client()
-
+            logger.info("Access token refreshed and saved")
         except Exception as e:
             logger.error(f"Token refresh failed: {e}")
+            raise
+
+    def save_tokens(self) -> None:
+        """Save the current access and refresh tokens."""
+        try:
+            self.config_manager.save_app_tokens(
+                self.app_config.name,
+                self.app_config.access_token,
+                self.app_config.refresh_token,
+            )
+            logger.info("Saved refreshed tokens to config")
+        except Exception as e:
+            logger.error(f"Failed to save refreshed tokens: {e}")
             raise
 
     def list_folder(self, path: str = "") -> List[dict]:
@@ -86,7 +119,11 @@ class DropboxClient:
                 item = {
                     "name": entry.name,
                     "path": entry.path_display,
-                    "type": "folder" if isinstance(entry, FolderMetadata) else "file",
+                    "type": (
+                        "folder"
+                        if isinstance(entry, FolderMetadata)
+                        else "file"
+                    ),
                 }
 
                 if isinstance(entry, FileMetadata):
@@ -127,7 +164,9 @@ class DropboxClient:
         try:
             with open(local_path, "rb") as f:
                 self._client.files_upload(
-                    f.read(), remote_path, mode=dropbox.files.WriteMode.overwrite
+                    f.read(),
+                    remote_path,
+                    mode=dropbox.files.WriteMode.overwrite,
                 )
 
             logger.info(f"Uploaded {local_path} to {remote_path}")
