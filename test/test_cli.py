@@ -32,8 +32,8 @@ class TestCLI:
         """Test --verbose flag."""
         mock_setup = mocker.patch("drobo.cli.setup_logging")
         runner = CliRunner()
-        # Need to provide required arguments but expect it to fail due to missing
-        # config
+        # Need to provide required arguments but expect it to fail
+        # due to missing config
         runner.invoke(cli, ["--verbose", "test_app", "ls"])
         mock_setup.assert_called_once_with(True)
 
@@ -63,7 +63,16 @@ class TestCLI:
         result = runner.invoke(cli, ["test_app", "ls", "/"])
 
         assert result.exit_code == 0
-        mock_handler.ls.assert_called_once_with(("/",))
+        mock_handler.ls_with_options.assert_called_once_with(
+            path="/",
+            show_all=False,
+            directory=False,
+            long_format=False,
+            reverse=False,
+            recursive=False,
+            sort_by_size=False,
+            sort_by_time=False,
+        )
 
     def test_app_command_nonexistent_app(self, mocker):
         """Test app command with non-existent app."""
@@ -84,3 +93,134 @@ class TestCLI:
         result = runner.invoke(cli, ["test_app", "invalid", "/"])
 
         assert result.exit_code == 2  # Click error for invalid choice
+
+    def test_ls_option_parsing(self, mocker):
+        """Test ls command option parsing."""
+        # Mock config manager
+        mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
+        mock_setup_commands = mocker.patch("drobo.cli.setup_commands")
+
+        mock_manager = mocker.Mock()
+        mock_config = AppConfig(
+            "test_app",
+            {
+                "app_key": "test_key",
+                "app_secret": "test_secret",
+                "access_token": "test_token",
+            },
+        )
+        mock_manager.get_app_config.return_value = mock_config
+        mock_config_manager.return_value = mock_manager
+
+        # Mock command handler
+        mock_handler = mocker.Mock()
+        mock_setup_commands.return_value = mock_handler
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["test_app", "ls", "-l", "-a", "/test"])
+
+        assert result.exit_code == 0
+        mock_handler.ls_with_options.assert_called_once_with(
+            path="/test",
+            show_all=True,
+            directory=False,
+            long_format=True,
+            reverse=False,
+            recursive=False,
+            sort_by_size=False,
+            sort_by_time=False,
+        )
+
+    def test_ls_all_options(self, mocker):
+        """Test ls with all options enabled."""
+        mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
+        mock_setup_commands = mocker.patch("drobo.cli.setup_commands")
+
+        mock_manager = mocker.Mock()
+        mock_config = AppConfig(
+            "test_app",
+            {
+                "app_key": "test_key",
+                "app_secret": "test_secret",
+                "access_token": "test_token",
+            },
+        )
+        mock_manager.get_app_config.return_value = mock_config
+        mock_config_manager.return_value = mock_manager
+
+        mock_handler = mocker.Mock()
+        mock_setup_commands.return_value = mock_handler
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "test_app",
+                "ls",
+                "-a",
+                "-d",
+                "-l",
+                "-r",
+                "-R",
+                "-S",
+                "-t",
+                "/test",
+            ],
+        )
+
+        assert result.exit_code == 0
+        mock_handler.ls_with_options.assert_called_once_with(
+            path="/test",
+            show_all=True,
+            directory=True,
+            long_format=True,
+            reverse=True,
+            recursive=True,
+            sort_by_size=True,
+            sort_by_time=True,
+        )
+
+    def test_ls_long_options(self, mocker):
+        """Test ls with long option names."""
+        mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
+        mock_setup_commands = mocker.patch("drobo.cli.setup_commands")
+
+        mock_manager = mocker.Mock()
+        mock_config = AppConfig(
+            "test_app",
+            {
+                "app_key": "test_key",
+                "app_secret": "test_secret",
+                "access_token": "test_token",
+            },
+        )
+        mock_manager.get_app_config.return_value = mock_config
+        mock_config_manager.return_value = mock_manager
+
+        mock_handler = mocker.Mock()
+        mock_setup_commands.return_value = mock_handler
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "test_app",
+                "ls",
+                "--all",
+                "--directory",
+                "--reverse",
+                "--recursive",
+            ],
+        )
+
+        assert result.exit_code == 0
+        mock_handler.ls_with_options.assert_called_once_with(
+            path="/",
+            show_all=True,
+            directory=True,
+            long_format=False,
+            reverse=True,
+            recursive=True,
+            sort_by_size=False,
+            sort_by_time=False,
+        )

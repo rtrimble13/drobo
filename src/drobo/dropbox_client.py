@@ -33,12 +33,12 @@ class DropboxClient:
             raise ValueError(
                 f"App '{self.app_config.name}' has no valid access tokens"
             )
-        
+
         self._client = dropbox.Dropbox(
             oauth2_access_token=self.app_config.access_token,
             app_key=self.app_config.app_key,
             app_secret=self.app_config.app_secret,
-            oauth2_refresh_token=self.app_config.refresh_token
+            oauth2_refresh_token=self.app_config.refresh_token,
         )
 
         logger.debug(
@@ -49,8 +49,10 @@ class DropboxClient:
         """Handle authentication errors and attempt token refresh."""
         logger.warning(f"Authentication error: {error}")
 
-        if error.error.is_expired_access_token() \
-            and not self._refresh_attempted:
+        if (
+            error.error.is_expired_access_token()
+            and not self._refresh_attempted
+        ):
             try:
                 self.refresh_access_token()
                 self.save_tokens()
@@ -67,30 +69,34 @@ class DropboxClient:
             raise ValueError("No app key available")
         if not self.app_config.app_secret:
             raise ValueError("No app secret available")
-        
+
         self._refresh_attempted = True
-            
+
         try:
             # Create a temporary client for token refresh
             flow = DropboxOAuth2FlowNoRedirect(
                 self.app_config.app_key,
                 self.app_config.app_secret,
                 token_access_type="offline",
-                scope=["files.metadata.read", "files.content.read", "files.content.write"],
-                include_granted_scopes="user"
+                scope=[
+                    "files.metadata.read",
+                    "files.content.read",
+                    "files.content.write",
+                ],
+                include_granted_scopes="user",
             )
 
             auth_url = flow.start()
             print("1. Go to: " + auth_url)
-            print("2. Click 'Allow', then paste the code here (You might have to log in).")
+            print(
+                "2. Click 'Allow', then paste the code here (You might have to log in)."
+            )
             auth_code = input("Enter the code: ").strip()
 
             oauth_result = flow.finish(auth_code)
             access_token = oauth_result.access_token
             refresh_token = oauth_result.refresh_token
-            self.app_config.update_tokens(
-                access_token, refresh_token
-            )
+            self.app_config.update_tokens(access_token, refresh_token)
             logger.info("Access token refreshed and saved")
         except Exception as e:
             logger.error(f"Token refresh failed: {e}")

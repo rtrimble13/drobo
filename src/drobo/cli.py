@@ -36,10 +36,8 @@ def print_version(ctx, param, value):
     ctx.exit()
 
 
-@click.command()
+@click.group()
 @click.argument("app_name")
-@click.argument("command", type=click.Choice(["ls", "cp", "mv", "rm"]))
-@click.argument("args", nargs=-1)
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option(
     "--version",
@@ -49,7 +47,8 @@ def print_version(ctx, param, value):
     callback=print_version,
     help="Show version and exit",
 )
-def cli(app_name: str, command: str, args: tuple, verbose: bool) -> None:
+@click.pass_context
+def cli(ctx, app_name: str, verbose: bool) -> None:
     """
     Drobo - A Dropbox CLI
 
@@ -59,34 +58,148 @@ def cli(app_name: str, command: str, args: tuple, verbose: bool) -> None:
     """
     setup_logging(verbose)
 
-    try:
-        config_manager = ConfigManager()
-        app_config = config_manager.get_app_config(app_name)
+    # Store app context for subcommands
+    ctx.ensure_object(dict)
+    ctx.obj["app_name"] = app_name
+    ctx.obj["verbose"] = verbose
 
-        if not app_config:
-            click.echo(
-                f"Error: App '{app_name}' not found in .droborc", err=True
+
+def get_command_handler(ctx):
+    """Get command handler, initializing if needed."""
+    if "command_handler" not in ctx.obj:
+        try:
+            config_manager = ConfigManager()
+            app_config = config_manager.get_app_config(ctx.obj["app_name"])
+
+            if not app_config:
+                click.echo(
+                    f"Error: App '{ctx.obj['app_name']}' not found in .droborc",
+                    err=True,
+                )
+                sys.exit(1)
+
+            # Setup the command handler
+            ctx.obj["command_handler"] = setup_commands(
+                app_config, ctx.obj["verbose"]
             )
+        except Exception as e:
+            logging.error(f"Command failed: {e}")
+            if ctx.obj["verbose"]:
+                raise
+            click.echo(f"Error: {e}", err=True)
             sys.exit(1)
 
-        # Setup the command handler
-        command_handler = setup_commands(app_config, verbose)
+    return ctx.obj["command_handler"]
 
-        # Execute the command
-        if command == "ls":
-            command_handler.ls(args)
-        elif command == "cp":
-            command_handler.cp(args)
-        elif command == "mv":
-            command_handler.mv(args)
-        elif command == "rm":
-            command_handler.rm(args)
 
+@cli.command()
+@click.argument("path", default="/")
+@click.option(
+    "-a",
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="do not ignore entries starting with '.'",
+)
+@click.option(
+    "-d",
+    "--directory",
+    is_flag=True,
+    help="list directories themselves, not their contents",
+)
+@click.option(
+    "-l", "long_format", is_flag=True, help="use a long listing format"
+)
+@click.option(
+    "-r", "--reverse", is_flag=True, help="reverse order while sorting"
+)
+@click.option(
+    "-R", "--recursive", is_flag=True, help="list subdirectories recursively"
+)
+@click.option(
+    "-S", "sort_by_size", is_flag=True, help="sort by file size, largest first"
+)
+@click.option(
+    "-t", "sort_by_time", is_flag=True, help="sort by time, newest first"
+)
+@click.pass_context
+def ls(
+    ctx,
+    path: str,
+    show_all: bool,
+    directory: bool,
+    long_format: bool,
+    reverse: bool,
+    recursive: bool,
+    sort_by_size: bool,
+    sort_by_time: bool,
+) -> None:
+    """List remote target contents. Mimic Linux ls command."""
+    try:
+        command_handler = get_command_handler(ctx)
+        command_handler.ls_with_options(
+            path=path,
+            show_all=show_all,
+            directory=directory,
+            long_format=long_format,
+            reverse=reverse,
+            recursive=recursive,
+            sort_by_size=sort_by_size,
+            sort_by_time=sort_by_time,
+        )
     except Exception as e:
-        logging.error(f"Command failed: {e}")
-        if verbose:
+        logging.error(f"ls command failed: {e}")
+        if ctx.obj.get("verbose"):
             raise
-        click.echo(f"Error: {e}", err=True)
+        click.echo(f"ls: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("args", nargs=-1)
+@click.pass_context
+def cp(ctx, args: tuple) -> None:
+    """Copy contents from one location to another. Mimic Linux cp command."""
+    try:
+        command_handler = get_command_handler(ctx)
+        command_handler.cp(args)
+    except Exception as e:
+        logging.error(f"cp command failed: {e}")
+        if ctx.obj.get("verbose"):
+            raise
+        click.echo(f"cp: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("args", nargs=-1)
+@click.pass_context
+def mv(ctx, args: tuple) -> None:
+    """Move contents from one location to another. Mimic Linux mv command."""
+    try:
+        command_handler = get_command_handler(ctx)
+        command_handler.mv(args)
+    except Exception as e:
+        logging.error(f"mv command failed: {e}")
+        if ctx.obj.get("verbose"):
+            raise
+        click.echo(f"mv: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("args", nargs=-1)
+@click.pass_context
+def rm(ctx, args: tuple) -> None:
+    """Remove remote files and folders. Mimic Linux rm command."""
+    try:
+        command_handler = get_command_handler(ctx)
+        command_handler.rm(args)
+    except Exception as e:
+        logging.error(f"rm command failed: {e}")
+        if ctx.obj.get("verbose"):
+            raise
+        click.echo(f"rm: {e}", err=True)
         sys.exit(1)
 
 
