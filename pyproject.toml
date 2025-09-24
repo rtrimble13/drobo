@@ -25,7 +25,7 @@ requires-python = ">=3.8"
 dependencies = [
     "click>=8.0.0",
     "dropbox>=11.0.0",
-    "configistate>=0.1.0"
+    "configistate>=1.0.0"
 ]
 
 [project.optional-dependencies]

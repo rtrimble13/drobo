@@ -213,6 +213,7 @@ class CommandHandler:
                 self.client.move_file(remote_source, destination)
             else:
                 # Remote to local
+                destination = os.path.abspath(destination)
                 self.client.download_file(remote_source, destination)
 
     def _upload_directory_recursive(
