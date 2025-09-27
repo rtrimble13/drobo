@@ -52,6 +52,9 @@ class CommandHandler:
                     item for item in items if not item["name"].startswith(".")
                 ]
 
+            # Sort items by name (for backward compatibility)
+            items = sorted(items, key=lambda x: x["name"])
+
             if long_format:
                 self._print_long_format(items)
             else:
@@ -61,8 +64,107 @@ class CommandHandler:
             click.echo(f"ls: {e}", err=True)
             raise
 
+    def ls_with_options(
+        self,
+        path: str = "/",
+        show_all: bool = False,
+        directory: bool = False,
+        long_format: bool = False,
+        reverse: bool = False,
+        recursive: bool = False,
+        sort_by_size: bool = False,
+        sort_by_time: bool = False,
+    ) -> None:
+        """List remote target contents with structured options."""
+        # Ensure path does not start with /
+        if path.startswith("/") and len(path) == 1:
+            path = ""
+
+        try:
+            if directory:
+                # List the directory itself, not its contents
+                # This is a simplified implementation - just show the path
+                click.echo(f"{path}/")
+                return
+
+            if recursive:
+                items = self._list_folder_recursive(path)
+            else:
+                items = self.client.list_folder(path)
+
+            if not show_all:
+                items = [
+                    item for item in items if not item["name"].startswith(".")
+                ]
+
+            # Apply sorting
+            if sort_by_size:
+                items = sorted(
+                    items, key=lambda x: x.get("size", 0), reverse=True
+                )
+            elif sort_by_time:
+                # Use modified time for sorting, handle both string and datetime
+                def get_modified_time(item):
+                    modified = item.get("modified", "")
+                    if hasattr(modified, "timestamp"):
+                        return modified.timestamp()
+                    elif isinstance(modified, str):
+                        return modified
+                    else:
+                        return ""
+
+                items = sorted(items, key=get_modified_time, reverse=True)
+            else:
+                # Default sort by name
+                items = sorted(items, key=lambda x: x["name"])
+
+            # Apply reverse only after all other sorting
+            if reverse:
+                items = items[::-1]
+
+            if long_format:
+                self._print_long_format(items)
+            else:
+                self._print_simple_format(items)
+
+        except Exception as e:
+            click.echo(f"ls: {e}", err=True)
+            raise
+
+    def _list_folder_recursive(self, path: str) -> List[dict]:
+        """List folder contents recursively."""
+        all_items = []
+
+        def _collect_items(current_path: str, prefix: str = ""):
+            try:
+                items = self.client.list_folder(current_path)
+                for item in items:
+                    # Add prefix for nested items
+                    if prefix:
+                        item = item.copy()
+                        item["name"] = f"{prefix}{item['name']}"
+                    all_items.append(item)
+
+                    # If it's a folder, recurse into it
+                    if item["type"] == "folder":
+                        folder_path = (
+                            f"{current_path}/{item['name']}"
+                            if current_path
+                            else item["name"]
+                        )
+                        folder_path = folder_path.replace(
+                            prefix, ""
+                        )  # Remove prefix from path
+                        _collect_items(folder_path, f"{prefix}{item['name']}/")
+            except Exception:
+                # Skip folders we can't access
+                pass
+
+        _collect_items(path)
+        return all_items
+
     def cp(self, args: Tuple[str, ...]) -> None:
-        """Copy contents from one location to another. Mimic Linux cp command."""
+        """Copy contents from one location to another. Mimic Linux cp."""
         if len(args) < 2:
             click.echo("cp: missing file operand", err=True)
             raise click.ClickException("cp requires source and destination")
@@ -94,7 +196,7 @@ class CommandHandler:
                 raise
 
     def mv(self, args: Tuple[str, ...]) -> None:
-        """Move contents from one location to another. Mimic Linux mv command."""
+        """Move contents from one location to another. Mimic Linux mv."""
         if len(args) != 2:
             click.echo("mv: requires exactly two arguments", err=True)
             raise click.ClickException("mv requires source and destination")
@@ -163,7 +265,7 @@ class CommandHandler:
 
     def _print_simple_format(self, items: List[dict]) -> None:
         """Print items in simple format."""
-        for item in sorted(items, key=lambda x: x["name"]):
+        for item in items:  # Don't sort here, items are already sorted
             if item["type"] == "folder":
                 click.echo(f"{item['name']}/")
             else:
@@ -171,7 +273,7 @@ class CommandHandler:
 
     def _print_long_format(self, items: List[dict]) -> None:
         """Print items in long format."""
-        for item in sorted(items, key=lambda x: x["name"]):
+        for item in items:  # Don't sort here, items are already sorted
             if item["type"] == "folder":
                 click.echo(f"drwxr-xr-x   - -       -  {item['name']}/")
             else:

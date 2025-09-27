@@ -38,14 +38,22 @@ drobo <app> ls [options] [path]
 ```
 
 Options:
-- `-l`: Long format (detailed file information)
-- `-a`: Show hidden files
+- `-a, --all`: do not ignore entries starting with '.'
+- `-d, --directory`: list directories themselves, not their contents
+- `-l`: use a long listing format
+- `-r, --reverse`: reverse order while sorting
+- `-R, --recursive`: list subdirectories recursively
+- `-S`: sort by file size, largest first
+- `-t`: sort by time, newest first
 
 Examples:
 ```bash
 drobo myapp ls /
 drobo myapp ls -l /Documents
 drobo myapp ls -la /
+drobo myapp ls -altr /Documents  # all files, long format, sorted by time, reversed
+drobo myapp ls -R /               # recursive listing
+drobo myapp ls -S /Documents      # sort by file size
 ```
 
 ### cp - Copy Files
