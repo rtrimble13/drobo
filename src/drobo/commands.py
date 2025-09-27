@@ -135,27 +135,24 @@ class CommandHandler:
         """List folder contents recursively."""
         all_items = []
 
-        def _collect_items(current_path: str, prefix: str = ""):
+        def _collect_items(current_path: str) -> None:
             try:
                 items = self.client.list_folder(current_path)
                 for item in items:
-                    # Add prefix for nested items
-                    if prefix:
+                    if item["type"] == "file":
                         item = item.copy()
-                        item["name"] = f"{prefix}{item['name']}"
+                        item["name"] = item["path"]
+
+                    if not item["name"].startswith("/"):
+                        item["name"] = f"/{item['name']}"
+
                     all_items.append(item)
 
                     # If it's a folder, recurse into it
                     if item["type"] == "folder":
-                        folder_path = (
-                            f"{current_path}/{item['name']}"
-                            if current_path
-                            else item["name"]
-                        )
-                        folder_path = folder_path.replace(
-                            prefix, ""
-                        )  # Remove prefix from path
-                        _collect_items(folder_path, f"{prefix}{item['name']}/")
+                        folder_path = item["path"]
+                        _collect_items(folder_path)
+                        
             except Exception:
                 # Skip folders we can't access
                 pass
