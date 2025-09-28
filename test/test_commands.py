@@ -124,10 +124,10 @@ class TestCommandHandler:
         """Test ls with -d/--directory option."""
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/test", directory=True)
+        command_handler.ls_with_options(path="//test", directory=True)
 
         # Should show the directory itself, not contents
-        mock_echo.assert_called_once_with("/test/")
+        mock_echo.assert_called_once_with("//test/")
 
     def test_ls_with_reverse_option(self, command_handler, mocker):
         """Test ls with -r/--reverse option."""
@@ -315,7 +315,7 @@ class TestCommandHandler:
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
         with pytest.raises(Exception):
-            command_handler.ls_with_options(path="/restricted")
+            command_handler.ls_with_options(path="//restricted")
 
         # Should echo error message
         mock_echo.assert_called_with("ls: Access denied", err=True)
@@ -500,6 +500,19 @@ class TestCommandHandler:
         command_handler.ls_with_options(path="//")
         command_handler.client.list_folder.assert_called_with("")
 
-        # Test with / (implicit remote root - backward compatibility)
+        # Test with / (default remote root)
         command_handler.ls_with_options(path="/")
         command_handler.client.list_folder.assert_called_with("")
+
+    def test_ls_rejects_local_paths(self, command_handler):
+        """Test ls rejects local paths that don't start with //."""
+        with pytest.raises(ValueError) as exc_info:
+            command_handler.ls_with_options(path="/local/path")
+
+        assert "Local paths not supported in ls command" in str(exc_info.value)
+        assert "Use // for remote paths" in str(exc_info.value)
+
+        with pytest.raises(ValueError) as exc_info:
+            command_handler.ls_with_options(path="/etc")
+
+        assert "Local paths not supported in ls command" in str(exc_info.value)

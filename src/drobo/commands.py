@@ -68,13 +68,15 @@ class CommandHandler:
         # Handle remote path convention with // prefix
         if _is_remote_path(path):
             path = _normalize_remote_path(path)
-        elif path == "/" or not path:
-            # Default to root
+        elif not path or path == "/":
+            # Default to remote root when no path given or just "/"
             path = ""
         else:
-            # If no prefix is given, assume remote (backward compatibility)
-            if path.startswith("/") and len(path) == 1:
-                path = ""
+            # All other paths (including /local/path) are not supported
+            raise ValueError(
+                f"Local paths not supported in ls command. Use // for "
+                f"remote paths. Got: {path}"
+            )
 
         try:
             items = self.client.list_folder(path)
@@ -108,27 +110,31 @@ class CommandHandler:
         sort_by_time: bool = False,
     ) -> None:
         """List remote target contents with structured options."""
+        # Store original path for display purposes
+        original_path = path
+
         # Handle remote path convention with // prefix
         if _is_remote_path(path):
             path = _normalize_remote_path(path)
-        elif path == "/":
-            # Default to root if just "/"
+        elif not path or path == "/":
+            # Default to remote root when no path given or just "/"
             path = ""
         else:
-            # If no prefix is given, assume remote (backward compatibility)
-            if path.startswith("/") and len(path) == 1:
-                path = ""
+            # All other paths are not supported
+            raise ValueError(
+                f"Local paths not supported in ls command. Use // for "
+                f"remote paths. Got: {path}"
+            )
 
         try:
             if directory:
                 # List the directory itself, not its contents
-                # For backward compatibility, show original path format
-                if path.startswith("/"):
-                    display_path = path
-                elif path:
-                    display_path = "/" + path
+                if _is_remote_path(original_path):
+                    display_path = original_path
+                elif original_path == "/" or not original_path:
+                    display_path = "//"
                 else:
-                    display_path = "/"
+                    display_path = "//" + original_path
                 click.echo(f"{display_path}/")
                 return
 
