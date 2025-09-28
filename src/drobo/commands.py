@@ -15,6 +15,31 @@ from drobo.dropbox_client import DropboxClient
 logger = logging.getLogger(__name__)
 
 
+def _is_remote_path(path: str) -> bool:
+    """Check if path is a remote path (starts with //)."""
+    return path.startswith("//")
+
+
+def _normalize_remote_path(path: str) -> str:
+    """Convert remote path from // prefix to Dropbox API format."""
+    if path.startswith("//"):
+        # Remove // prefix and ensure path starts with / for Dropbox API
+        normalized = path[2:]  # Remove //
+        if not normalized:
+            return ""  # Root directory
+        if not normalized.startswith("/"):
+            normalized = "/" + normalized
+        return normalized
+    return path
+
+
+def _normalize_local_path(path: str) -> str:
+    """Expand and normalize local paths (~, ./, ../, etc)."""
+    if path.startswith("~/"):
+        return os.path.expanduser(path)
+    return os.path.abspath(path)
+
+
 class CommandHandler:
     """Handles all drobo commands."""
 
@@ -40,9 +65,16 @@ class CommandHandler:
             else:
                 path = arg
 
-        # Ensure path does not start with /
-        if path.startswith("/") and len(path) == 1:
+        # Handle remote path convention with // prefix
+        if _is_remote_path(path):
+            path = _normalize_remote_path(path)
+        elif path == "/" or not path:
+            # Default to root
             path = ""
+        else:
+            # If no prefix is given, assume remote (backward compatibility)
+            if path.startswith("/") and len(path) == 1:
+                path = ""
 
         try:
             items = self.client.list_folder(path)
@@ -76,15 +108,28 @@ class CommandHandler:
         sort_by_time: bool = False,
     ) -> None:
         """List remote target contents with structured options."""
-        # Ensure path does not start with /
-        if path.startswith("/") and len(path) == 1:
+        # Handle remote path convention with // prefix
+        if _is_remote_path(path):
+            path = _normalize_remote_path(path)
+        elif path == "/":
+            # Default to root if just "/"
             path = ""
+        else:
+            # If no prefix is given, assume remote (backward compatibility)
+            if path.startswith("/") and len(path) == 1:
+                path = ""
 
         try:
             if directory:
                 # List the directory itself, not its contents
-                # This is a simplified implementation - just show the path
-                click.echo(f"{path}/")
+                # For backward compatibility, show original path format
+                if path.startswith("/"):
+                    display_path = path
+                elif path:
+                    display_path = "/" + path
+                else:
+                    display_path = "/"
+                click.echo(f"{display_path}/")
                 return
 
             if recursive:
@@ -152,7 +197,7 @@ class CommandHandler:
                     if item["type"] == "folder":
                         folder_path = item["path"]
                         _collect_items(folder_path)
-                        
+
             except Exception:
                 # Skip folders we can't access
                 pass
@@ -167,27 +212,77 @@ class CommandHandler:
             raise click.ClickException("cp requires source and destination")
 
         recursive = False
+        treat_target_as_file = False  # -T flag
+        target_directory = None  # -t flag
         sources = []
         destination = None
 
         # Parse arguments
-        for arg in args:
+        i = 0
+        while i < len(args):
+            arg = args[i]
             if arg.startswith("-"):
-                if "r" in arg or "R" in arg:
+                # Handle flags
+                if arg == "-T":
+                    treat_target_as_file = True
+                elif arg == "-t":
+                    # Next argument is the target directory
+                    i += 1
+                    if i >= len(args):
+                        click.echo(
+                            "cp: option requires an argument -- 't'", err=True
+                        )
+                        raise click.ClickException(
+                            "cp: -t requires directory argument"
+                        )
+                    target_directory = args[i]
+                elif "r" in arg or "R" in arg:
                     recursive = True
+                elif "T" in arg:
+                    treat_target_as_file = True
+                elif "t" in arg:
+                    # Combined flag like -rt, need to get directory next
+                    i += 1
+                    if i >= len(args):
+                        click.echo(
+                            "cp: option requires an argument -- 't'", err=True
+                        )
+                        raise click.ClickException(
+                            "cp: -t requires directory argument"
+                        )
+                    target_directory = args[i]
             else:
-                if destination is None:
-                    sources.append(arg)
-                else:
-                    sources.append(destination)
-                    destination = arg
+                sources.append(arg)
+            i += 1
 
-        if not destination:
+        # Handle different cp command forms
+        if target_directory is not None:
+            # Form: cp -t DIRECTORY SOURCE ...
+            destination = target_directory
+            if not sources:
+                click.echo("cp: missing file operand", err=True)
+                raise click.ClickException("cp: -t requires source files")
+        elif treat_target_as_file:
+            # Form: cp -T SOURCE DEST
+            if len(sources) != 2:
+                click.echo("cp: -T requires exactly two arguments", err=True)
+                raise click.ClickException(
+                    "cp: -T requires exactly one source and one destination"
+                )
+            destination = sources.pop()
+        else:
+            # Form: cp SOURCE ... DIRECTORY (traditional form)
+            if len(sources) < 2:
+                click.echo("cp: missing file operand", err=True)
+                raise click.ClickException("cp requires source and destination")
             destination = sources.pop()
 
+        # Perform the copy operations
         for source in sources:
             try:
-                self._copy_file_or_folder(source, destination, recursive)
+                self._copy_file_or_folder(
+                    source, destination, recursive, treat_target_as_file
+                )
             except Exception as e:
                 click.echo(f"cp: {e}", err=True)
                 raise
@@ -283,37 +378,186 @@ class CommandHandler:
                 )
 
     def _copy_file_or_folder(
-        self, source: str, destination: str, recursive: bool = False
+        self,
+        source: str,
+        destination: str,
+        recursive: bool = False,
+        treat_target_as_file: bool = False,
     ) -> None:
         """Copy a file or folder."""
-        # Determine if source is local or remote
-        if os.path.exists(source):
+        # Normalize paths based on conventions
+        source_is_remote = _is_remote_path(source)
+        dest_is_remote = _is_remote_path(destination)
+
+        if source_is_remote:
+            source_path = _normalize_remote_path(source)
+        else:
+            source_path = _normalize_local_path(source)
+
+        if dest_is_remote:
+            dest_path = _normalize_remote_path(destination)
+        else:
+            dest_path = _normalize_local_path(destination)
+
+        # Determine operation type
+        if source_is_remote and dest_is_remote:
+            # Remote to remote
+            self._copy_remote_to_remote(
+                source_path, dest_path, recursive, treat_target_as_file
+            )
+        elif source_is_remote and not dest_is_remote:
+            # Remote to local
+            self._copy_remote_to_local(
+                source_path, dest_path, recursive, treat_target_as_file
+            )
+        elif not source_is_remote and dest_is_remote:
             # Local to remote
-            if os.path.isfile(source):
-                remote_dest = (
-                    destination
-                    if destination.startswith("/")
-                    else "/" + destination
-                )
-                self.client.upload_file(source, remote_dest)
-            elif os.path.isdir(source) and recursive:
-                # Upload directory recursively
-                self._upload_directory_recursive(source, destination)
+            self._copy_local_to_remote(
+                source_path, dest_path, recursive, treat_target_as_file
+            )
+        else:
+            # Both local - this tool is not for local to local copying
+            raise ValueError(
+                "drobo cp is not used for copying local files to local "
+                "destinations"
+            )
+
+    def _copy_local_to_remote(
+        self,
+        source: str,
+        destination: str,
+        recursive: bool,
+        treat_target_as_file: bool,
+    ) -> None:
+        """Copy from local to remote."""
+        if os.path.isfile(source):
+            if treat_target_as_file or not self._is_remote_directory(
+                destination
+            ):
+                # Copy to specific file path
+                self.client.upload_file(source, destination)
             else:
+                # Copy into directory
+                filename = os.path.basename(source)
+                dest_file = f"{destination.rstrip('/')}/{filename}"
+                self.client.upload_file(source, dest_file)
+        elif os.path.isdir(source):
+            if not recursive:
                 raise ValueError(
                     f"'{source}' is a directory (use -r for recursive copy)"
                 )
+            self._upload_directory_recursive(source, destination)
         else:
-            # Remote to local or remote to remote
-            remote_source = source if source.startswith("/") else "/" + source
+            raise ValueError(f"'{source}': No such file or directory")
 
-            if destination.startswith("/"):
-                # Remote to remote
-                self.client.move_file(remote_source, destination)
+    def _copy_remote_to_local(
+        self,
+        source: str,
+        destination: str,
+        recursive: bool,
+        treat_target_as_file: bool,
+    ) -> None:
+        """Copy from remote to local."""
+        try:
+            # Check if source is a file or directory by attempting to get
+            # its metadata
+            metadata = self.client.get_metadata(source)
+            if metadata.get("type") == "file":
+                if treat_target_as_file:
+                    self.client.download_file(source, destination)
+                else:
+                    # If destination is a directory, copy into it
+                    if os.path.isdir(destination):
+                        filename = os.path.basename(source)
+                        dest_file = os.path.join(destination, filename)
+                        self.client.download_file(source, dest_file)
+                    else:
+                        self.client.download_file(source, destination)
+            elif metadata.get("type") == "folder":
+                if not recursive:
+                    raise ValueError(
+                        f"'{source}' is a directory (use -r for recursive copy)"
+                    )
+                self._download_directory_recursive(source, destination)
             else:
-                # Remote to local
-                destination = os.path.abspath(destination)
-                self.client.download_file(remote_source, destination)
+                raise ValueError(f"'{source}': Unknown file type")
+        except Exception:
+            raise ValueError(f"'{source}': No such file or directory")
+
+    def _copy_remote_to_remote(
+        self,
+        source: str,
+        destination: str,
+        recursive: bool,
+        treat_target_as_file: bool,
+    ) -> None:
+        """Copy from remote to remote."""
+        try:
+            # Check if source is a file or directory
+            metadata = self.client.get_metadata(source)
+            if metadata.get("type") == "file":
+                if treat_target_as_file or not self._is_remote_directory(
+                    destination
+                ):
+                    # Copy to specific file path
+                    self.client.copy_file(source, destination)
+                else:
+                    # Copy into directory
+                    filename = os.path.basename(source)
+                    dest_file = f"{destination.rstrip('/')}/{filename}"
+                    self.client.copy_file(source, dest_file)
+            elif metadata.get("type") == "folder":
+                if not recursive:
+                    raise ValueError(
+                        f"'{source}' is a directory (use -r for recursive copy)"
+                    )
+                self._copy_directory_recursive_remote(source, destination)
+            else:
+                raise ValueError(f"'{source}': Unknown file type")
+        except Exception:
+            raise ValueError(f"'{source}': No such file or directory")
+
+    def _is_remote_directory(self, path: str) -> bool:
+        """Check if a remote path is a directory."""
+        try:
+            metadata = self.client.get_metadata(path)
+            return metadata.get("type") == "folder"
+        except Exception:
+            return False
+
+    def _download_directory_recursive(
+        self, remote_dir: str, local_base: str
+    ) -> None:
+        """Download a directory recursively."""
+        os.makedirs(local_base, exist_ok=True)
+
+        items = self.client.list_folder(remote_dir)
+        for item in items:
+            if item["type"] == "file":
+                local_path = os.path.join(local_base, item["name"])
+                remote_path = item["path"]
+                self.client.download_file(remote_path, local_path)
+            elif item["type"] == "folder":
+                local_subdir = os.path.join(local_base, item["name"])
+                remote_subdir = item["path"]
+                self._download_directory_recursive(remote_subdir, local_subdir)
+
+    def _copy_directory_recursive_remote(
+        self, remote_source: str, remote_dest: str
+    ) -> None:
+        """Copy a directory recursively within remote storage."""
+        items = self.client.list_folder(remote_source)
+        for item in items:
+            if item["type"] == "file":
+                source_file = item["path"]
+                dest_file = f"{remote_dest.rstrip('/')}/{item['name']}"
+                self.client.copy_file(source_file, dest_file)
+            elif item["type"] == "folder":
+                source_subdir = item["path"]
+                dest_subdir = f"{remote_dest.rstrip('/')}/{item['name']}"
+                self._copy_directory_recursive_remote(
+                    source_subdir, dest_subdir
+                )
 
     def _upload_directory_recursive(
         self, local_dir: str, remote_base: str

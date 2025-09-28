@@ -159,7 +159,25 @@ def ls(
 @click.argument("args", nargs=-1)
 @click.pass_context
 def cp(ctx, args: tuple) -> None:
-    """Copy contents from one location to another. Mimic Linux cp command."""
+    """Copy contents from one location to another. Mimic Linux cp command.
+
+    Usage:
+    drobo <app name> cp [options] SOURCE ... DEST
+    drobo <app name> cp [options] -T SOURCE DEST
+    drobo <app name> cp [options] -t DIRECTORY SOURCE ...
+
+    Remote paths begin with //, local paths follow Linux conventions.
+
+    Options:
+    -r       Copy directories recursively
+    -T       Treat DEST as a regular file
+    -t DIR   Copy all SOURCE files into DIR
+
+    Examples:
+    drobo myapp cp ~/file1 //          Copy local file to remote root
+    drobo myapp cp -T //subdir/file2 ../file2    Copy remote to local
+    drobo myapp cp -rt ./local_dir //subdir1 //subdir2   Copy remote dirs
+    """
     try:
         command_handler = get_command_handler(ctx)
         command_handler.cp(args)

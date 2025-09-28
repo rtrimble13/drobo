@@ -89,7 +89,8 @@ class DropboxClient:
             auth_url = flow.start()
             print("1. Go to: " + auth_url)
             print(
-                "2. Click 'Allow', then paste the code here (You might have to log in)."
+                "2. Click 'Allow', then paste the code here "
+                "(You might have to log in)."
             )
             auth_code = input("Enter the code: ").strip()
 
@@ -183,6 +184,42 @@ class DropboxClient:
             self.upload_file(local_path, remote_path)
         except ApiError as e:
             logger.error(f"API error uploading file '{local_path}': {e}")
+            raise
+
+    def copy_file(self, from_path: str, to_path: str) -> None:
+        """Copy a file or folder."""
+        try:
+            self._client.files_copy_v2(from_path, to_path)
+            logger.info(f"Copied {from_path} to {to_path}")
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            self.copy_file(from_path, to_path)
+        except ApiError as e:
+            logger.error(f"API error copying '{from_path}' to '{to_path}': {e}")
+            raise
+
+    def get_metadata(self, path: str) -> dict:
+        """Get metadata for a file or folder."""
+        try:
+            metadata = self._client.files_get_metadata(path)
+            return {
+                "name": metadata.name,
+                "path": metadata.path_display,
+                "type": (
+                    "folder" if isinstance(metadata, FolderMetadata) else "file"
+                ),
+                "size": getattr(metadata, "size", None),
+                "modified": getattr(metadata, "client_modified", None),
+            }
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            return self.get_metadata(path)
+        except ApiError as e:
+            logger.error(f"API error getting metadata for '{path}': {e}")
             raise
 
     def move_file(self, from_path: str, to_path: str) -> None:
