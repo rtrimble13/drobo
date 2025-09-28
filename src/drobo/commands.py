@@ -341,6 +341,50 @@ class CommandHandler:
                 click.echo(f"cp: {e}", err=True)
                 raise
 
+    def mv_with_options(self, source: str, destination: str) -> None:
+        """Move contents with structured options (like ls_with_options)."""
+        if not source or not destination:
+            click.echo("mv: missing operand", err=True)
+            raise click.ClickException("mv requires source and destination")
+
+        try:
+            # Normalize paths based on conventions
+            source_is_remote = _is_remote_path(source)
+            dest_is_remote = _is_remote_path(destination)
+
+            if source_is_remote:
+                source_path = _normalize_remote_path(source)
+            else:
+                source_path = _normalize_local_path(source)
+
+            if dest_is_remote:
+                dest_path = _normalize_remote_path(destination)
+            else:
+                dest_path = _normalize_local_path(destination)
+
+            # Handle different move operations
+            if source_is_remote and dest_is_remote:
+                # Remote to remote
+                self.client.move_file(source_path, dest_path)
+            elif not source_is_remote and dest_is_remote:
+                # Local to remote (upload then delete local)
+                self.client.upload_file(source_path, dest_path)
+                os.remove(source_path)
+            elif source_is_remote and not dest_is_remote:
+                # Remote to local (download then delete remote)
+                self.client.download_file(source_path, dest_path)
+                self.client.delete_file(source_path)
+            else:
+                # Both local - not supported
+                raise ValueError(
+                    "drobo mv is not used for moving local files to local "
+                    "destinations"
+                )
+
+        except Exception as e:
+            click.echo(f"mv: {e}", err=True)
+            raise
+
     def mv(self, args: Tuple[str, ...]) -> None:
         """Move contents from one location to another. Mimic Linux mv."""
         if len(args) != 2:
@@ -375,6 +419,37 @@ class CommandHandler:
         except Exception as e:
             click.echo(f"mv: {e}", err=True)
             raise
+
+    def rm_with_options(
+        self, files: tuple, force: bool = False, recursive: bool = False
+    ) -> None:
+        """Remove files with structured options (like ls_with_options)."""
+        if not files:
+            click.echo("rm: missing operand", err=True)
+            raise click.ClickException("rm requires at least one file")
+
+        for file_path in files:
+            try:
+                # Normalize path based on conventions
+                if _is_remote_path(file_path):
+                    remote_path = _normalize_remote_path(file_path)
+                else:
+                    # rm only works on remote files
+                    raise ValueError(
+                        f"rm: cannot remove '{file_path}': Only remote files "
+                        f"(starting with //) can be removed"
+                    )
+
+                self.client.delete_file(remote_path)
+                if self.verbose:
+                    click.echo(f"removed '{file_path}'")
+
+            except Exception as e:
+                if not force:
+                    click.echo(f"rm: {e}", err=True)
+                    raise
+                elif self.verbose:
+                    click.echo(f"rm: {e}", err=True)
 
     def rm(self, args: Tuple[str, ...]) -> None:
         """Remove remote files and folders. Mimic Linux rm command."""

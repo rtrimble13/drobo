@@ -205,13 +205,22 @@ def cp(
 
 
 @cli.command()
-@click.argument("args", nargs=-1)
+@click.argument("source")
+@click.argument("destination")
 @click.pass_context
-def mv(ctx, args: tuple) -> None:
-    """Move contents from one location to another. Mimic Linux mv command."""
+def mv(ctx, source: str, destination: str) -> None:
+    """Move contents from one location to another. Mimic Linux mv command.
+
+    Remote paths begin with //, local paths follow Linux conventions.
+
+    Examples:
+    drobo myapp mv ~/file1 //file2      Move local file to remote
+    drobo myapp mv //file1 ~/file2      Move remote file to local
+    drobo myapp mv //file1 //file2      Move remote file to remote
+    """
     try:
         command_handler = get_command_handler(ctx)
-        command_handler.mv(args)
+        command_handler.mv_with_options(source, destination)
     except Exception as e:
         logging.error(f"mv command failed: {e}")
         if ctx.obj.get("verbose"):
@@ -221,13 +230,33 @@ def mv(ctx, args: tuple) -> None:
 
 
 @cli.command()
-@click.argument("args", nargs=-1)
+@click.argument("files", nargs=-1, required=True)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    help="ignore nonexistent files and arguments, never prompt",
+)
+@click.option(
+    "-r",
+    "--recursive",
+    is_flag=True,
+    help="remove directories and their contents recursively",
+)
 @click.pass_context
-def rm(ctx, args: tuple) -> None:
-    """Remove remote files and folders. Mimic Linux rm command."""
+def rm(ctx, files: tuple, force: bool, recursive: bool) -> None:
+    """Remove remote files and folders. Mimic Linux rm command.
+
+    Only remote files (starting with //) can be removed.
+
+    Examples:
+    drobo myapp rm //file1              Remove remote file
+    drobo myapp rm -f //file1 //file2   Force remove multiple files
+    drobo myapp rm -rf //directory      Force remove directory recursively
+    """
     try:
         command_handler = get_command_handler(ctx)
-        command_handler.rm(args)
+        command_handler.rm_with_options(files, force, recursive)
     except Exception as e:
         logging.error(f"rm command failed: {e}")
         if ctx.obj.get("verbose"):
