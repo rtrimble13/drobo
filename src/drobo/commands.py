@@ -211,6 +211,54 @@ class CommandHandler:
         _collect_items(path)
         return all_items
 
+    def cp_with_options(
+        self,
+        sources: tuple,
+        recursive: bool = False,
+        treat_as_file: bool = False,
+        target_directory: str = None,
+    ) -> None:
+        """Copy contents with structured options (like ls_with_options)."""
+        if not sources:
+            click.echo("cp: missing file operand", err=True)
+            raise click.ClickException("cp requires source files")
+
+        # Convert sources tuple to list for easier manipulation
+        source_list = list(sources)
+        destination = None
+
+        # Handle different cp command forms
+        if target_directory is not None:
+            # Form: cp -t DIRECTORY SOURCE ...
+            destination = target_directory
+            if not source_list:
+                click.echo("cp: missing file operand", err=True)
+                raise click.ClickException("cp: -t requires source files")
+        elif treat_as_file:
+            # Form: cp -T SOURCE DEST
+            if len(source_list) != 2:
+                click.echo("cp: -T requires exactly two arguments", err=True)
+                raise click.ClickException(
+                    "cp: -T requires exactly one source and one destination"
+                )
+            destination = source_list.pop()
+        else:
+            # Form: cp SOURCE ... DIRECTORY (traditional form)
+            if len(source_list) < 2:
+                click.echo("cp: missing file operand", err=True)
+                raise click.ClickException("cp requires source and destination")
+            destination = source_list.pop()
+
+        # Perform the copy operations
+        for source in source_list:
+            try:
+                self._copy_file_or_folder(
+                    source, destination, recursive, treat_as_file
+                )
+            except Exception as e:
+                click.echo(f"cp: {e}", err=True)
+                raise
+
     def cp(self, args: Tuple[str, ...]) -> None:
         """Copy contents from one location to another. Mimic Linux cp."""
         if len(args) < 2:

@@ -156,9 +156,24 @@ def ls(
 
 
 @cli.command()
-@click.argument("args", nargs=-1)
+@click.argument("sources", nargs=-1, required=True)
+@click.option(
+    "-r", "--recursive", is_flag=True, help="copy directories recursively"
+)
+@click.option(
+    "-T", "treat_as_file", is_flag=True, help="treat DEST as a normal file"
+)
+@click.option(
+    "-t", "--target-directory", help="copy all SOURCE arguments into DIRECTORY"
+)
 @click.pass_context
-def cp(ctx, args: tuple) -> None:
+def cp(
+    ctx,
+    sources: tuple,
+    recursive: bool,
+    treat_as_file: bool,
+    target_directory: str,
+) -> None:
     """Copy contents from one location to another. Mimic Linux cp command.
 
     Usage:
@@ -168,11 +183,6 @@ def cp(ctx, args: tuple) -> None:
 
     Remote paths begin with //, local paths follow Linux conventions.
 
-    Options:
-    -r       Copy directories recursively
-    -T       Treat DEST as a regular file
-    -t DIR   Copy all SOURCE files into DIR
-
     Examples:
     drobo myapp cp ~/file1 //          Copy local file to remote root
     drobo myapp cp -T //subdir/file2 ../file2    Copy remote to local
@@ -180,7 +190,12 @@ def cp(ctx, args: tuple) -> None:
     """
     try:
         command_handler = get_command_handler(ctx)
-        command_handler.cp(args)
+        command_handler.cp_with_options(
+            sources=sources,
+            recursive=recursive,
+            treat_as_file=treat_as_file,
+            target_directory=target_directory,
+        )
     except Exception as e:
         logging.error(f"cp command failed: {e}")
         if ctx.obj.get("verbose"):

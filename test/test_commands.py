@@ -340,7 +340,10 @@ class TestCommandHandler:
         mocker.patch("os.path.isfile", return_value=True)
         mock_upload = mocker.patch.object(command_handler.client, "upload_file")
 
-        command_handler.cp(("-T", "/home/user/source_file", "//dest_file"))
+        command_handler.cp_with_options(
+            sources=("/home/user/source_file", "//dest_file"),
+            treat_as_file=True,
+        )
 
         # Should upload to exact destination path
         mock_upload.assert_called_once_with(
@@ -373,8 +376,9 @@ class TestCommandHandler:
             command_handler, "_is_remote_directory", return_value=True
         )
 
-        command_handler.cp(
-            ("-t", "//target_dir", "/home/user/file1", "/home/user/file2")
+        command_handler.cp_with_options(
+            sources=("/home/user/file1", "/home/user/file2"),
+            target_directory="//target_dir",
         )
 
         # Should upload both files to target directory
@@ -407,7 +411,9 @@ class TestCommandHandler:
         )
         mocker.patch("os.path.isdir", return_value=False)
 
-        command_handler.cp(("//remote/file", "/home/user/local_file"))
+        command_handler.cp_with_options(
+            sources=("//remote/file", "/home/user/local_file")
+        )
 
         mock_download.assert_called_once_with(
             "/remote/file", "/home/user/local_file"
@@ -434,7 +440,9 @@ class TestCommandHandler:
             command_handler, "_upload_directory_recursive"
         )
 
-        command_handler.cp(("-r", "/home/user/local_dir", "//remote_dir"))
+        command_handler.cp_with_options(
+            sources=("/home/user/local_dir", "//remote_dir"), recursive=True
+        )
 
         mock_upload_recursive.assert_called_once_with(
             "/home/user/local_dir", "/remote_dir"
@@ -455,7 +463,9 @@ class TestCommandHandler:
         ]
 
         with pytest.raises(Exception) as exc_info:
-            command_handler.cp(("/home/user/file1", "/home/user/file2"))
+            command_handler.cp_with_options(
+                sources=("/home/user/file1", "/home/user/file2")
+            )
 
         assert "not used for copying local files to local destinations" in str(
             exc_info.value
