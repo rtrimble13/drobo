@@ -65,8 +65,6 @@ class TestCLI:
         assert result.exit_code == 0
         mock_handler.ls_with_options.assert_called_once_with(
             path="/",
-            show_all=False,
-            directory=False,
             long_format=False,
             reverse=False,
             recursive=False,
@@ -117,13 +115,11 @@ class TestCLI:
         mock_setup_commands.return_value = mock_handler
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["test_app", "ls", "-l", "-a", "/test"])
+        result = runner.invoke(cli, ["test_app", "ls", "-l", "/test"])
 
         assert result.exit_code == 0
         mock_handler.ls_with_options.assert_called_once_with(
             path="/test",
-            show_all=True,
-            directory=False,
             long_format=True,
             reverse=False,
             recursive=False,
@@ -157,8 +153,6 @@ class TestCLI:
             [
                 "test_app",
                 "ls",
-                "-a",
-                "-d",
                 "-l",
                 "-r",
                 "-R",
@@ -171,8 +165,6 @@ class TestCLI:
         assert result.exit_code == 0
         mock_handler.ls_with_options.assert_called_once_with(
             path="/test",
-            show_all=True,
-            directory=True,
             long_format=True,
             reverse=True,
             recursive=True,
@@ -206,8 +198,6 @@ class TestCLI:
             [
                 "test_app",
                 "ls",
-                "--all",
-                "--directory",
                 "--reverse",
                 "--recursive",
             ],
@@ -216,8 +206,6 @@ class TestCLI:
         assert result.exit_code == 0
         mock_handler.ls_with_options.assert_called_once_with(
             path="/",
-            show_all=True,
-            directory=True,
             long_format=False,
             reverse=True,
             recursive=True,

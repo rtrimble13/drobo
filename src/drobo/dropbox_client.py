@@ -3,6 +3,7 @@ Dropbox API client for drobo.
 """
 
 import logging
+import os
 from typing import List
 
 import dropbox
@@ -116,15 +117,36 @@ class DropboxClient:
             logger.error(f"Failed to save refreshed tokens: {e}")
             raise
 
-    def list_folder(self, path: str = "") -> List[dict]:
-        """List contents of a folder."""
+    def list_folder(
+        self, path: str = "", mask: str = None, *args, **kwargs
+    ) -> List[dict]:
+        """
+        List contents of a folder.
+        Supports pagination and returns a list of items with metadata.
+        If 'recursive' is passed in kwargs, it will list all subfolders
+        recursively.
+        """
         try:
-            result = self._client.files_list_folder(path)
+            result = self._client.files_list_folder(path, *args, **kwargs)
+            entries = result.entries
+            while result.has_more:
+                result = self._client.files_list_folder_continue(result.cursor)
+                entries.extend(result.entries)
+
+            if mask:
+                import re
+
+                pattern = re.compile(mask)
+
             items = []
 
-            for entry in result.entries:
+            for entry in entries:
+                if mask and not pattern.search(entry.name):
+                    continue
+
                 item = {
-                    "name": entry.name,
+                    "name": os.path.basename(entry.name),
+                    "dir": os.path.dirname(entry.path_display),
                     "path": entry.path_display,
                     "type": (
                         "folder"

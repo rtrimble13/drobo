@@ -4,6 +4,7 @@ Command handlers for drobo CLI commands.
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List, Tuple
 
@@ -20,24 +21,67 @@ def _is_remote_path(path: str) -> bool:
     return path.startswith("//")
 
 
-def _normalize_remote_path(path: str) -> str:
-    """Convert remote path from // prefix to Dropbox API format."""
-    if path.startswith("//"):
-        # Remove // prefix and ensure path starts with / for Dropbox API
-        normalized = path[2:]  # Remove //
-        if not normalized:
-            return ""  # Root directory
-        if not normalized.startswith("/"):
-            normalized = "/" + normalized
-        return normalized
-    return path
+def _normalize_remote_path(path: str) -> Tuple[str, str]:
+    """
+    Convert remote path from // prefix to Dropbox API format.
+    Dropbox API paths start with / and do not have // prefix.
+    returns: (normalized_path, wildcard_pattern or None)
+    """
+    if not path:
+        return ("", None)  # Empty path means root in Dropbox API
+
+    base, mask = "", None
+    if _has_wildcards(path):
+        # Split into base and wildcard part
+        base, mask = os.path.split(path)
+    else:
+        base = path
+
+    # remove all leading //
+    base = re.sub(r"^/+", "", base)
+
+    if base:
+        base = "/" + base  # Ensure leading / for non-root path.
+    return (base, _get_wildcard_regex(mask))
 
 
-def _normalize_local_path(path: str) -> str:
+def _normalize_local_path(path: str) -> Tuple[str, str]:
     """Expand and normalize local paths (~, ./, ../, etc)."""
-    if path.startswith("~/"):
-        return os.path.expanduser(path)
-    return os.path.abspath(path)
+    if not path:
+        # Empty path is current directory
+        return (os.path.abspath(os.getcwd()), None)
+
+    base, mask = "", None
+    if _has_wildcards(path):
+        base, mask = os.path.split(path)
+    else:
+        base = path
+
+    if base.startswith("~/"):
+        base = os.path.expanduser(base)
+    else:
+        base = os.path.abspath(base)
+
+    return (base, _get_wildcard_regex(mask))
+
+
+def _has_wildcards(path: str) -> bool:
+    """Check if the path contains wildcard characters."""
+    return bool(re.search(r"[\*\?\[\]]", path))
+
+
+def _get_wildcard_regex(pattern: str) -> str:
+    """Convert a wildcard pattern to a regex pattern."""
+    if not pattern:
+        return None
+    escaped = re.escape(pattern)
+    regex_pattern = (
+        escaped.replace(r"\*", ".*")
+        .replace(r"\?", ".")
+        .replace(r"\[", "[")
+        .replace(r"\]", "]")
+    )
+    return f"^{regex_pattern}$"
 
 
 class CommandHandler:
@@ -49,60 +93,28 @@ class CommandHandler:
         self.config_manager = ConfigManager()
         self.client = DropboxClient(app_config, self.config_manager)
 
-    def ls(self, args: Tuple[str, ...]) -> None:
-        """List remote target contents. Mimic Linux ls command."""
-        # Parse ls arguments
-        path = "/"
-        show_hidden = False
-        long_format = False
-
-        for arg in args:
-            if arg.startswith("-"):
-                if "a" in arg:
-                    show_hidden = True
-                if "l" in arg:
-                    long_format = True
-            else:
-                path = arg
-
-        # Handle remote path convention with // prefix
-        if _is_remote_path(path):
-            path = _normalize_remote_path(path)
-        elif not path or path == "/":
-            # Default to remote root when no path given or just "/"
-            path = ""
-        else:
-            # All other paths (including /local/path) are not supported
-            raise ValueError(
-                f"Local paths not supported in ls command. Use // for "
-                f"remote paths. Got: {path}"
-            )
-
-        try:
-            items = self.client.list_folder(path)
-
-            if not show_hidden:
-                items = [
-                    item for item in items if not item["name"].startswith(".")
-                ]
-
-            # Sort items by name (for backward compatibility)
-            items = sorted(items, key=lambda x: x["name"])
-
-            if long_format:
-                self._print_long_format(items)
-            else:
-                self._print_simple_format(items)
-
-        except Exception as e:
-            click.echo(f"ls: {e}", err=True)
-            raise
+    def _filter_by_mask(
+        self, items: List[dict], mask: str = None, show_all: bool = False
+    ) -> List[dict]:
+        """
+        Filter items by wildcard mask.
+        items: list of item dicts with 'name' key
+        mask: wildcard pattern (e.g. *.txt)
+        show_all: if True, include hidden files (starting with .)
+        returns: filtered list of items
+        """
+        if mask:
+            regex = re.compile(mask)
+            filtered = [item for item in items if regex.match(item["name"])]
+        if not show_all:
+            filtered = [
+                item for item in items if not item["name"].startswith(".")
+            ]
+        return filtered
 
     def ls_with_options(
         self,
         path: str = "/",
-        show_all: bool = False,
-        directory: bool = False,
         long_format: bool = False,
         reverse: bool = False,
         recursive: bool = False,
@@ -111,11 +123,10 @@ class CommandHandler:
     ) -> None:
         """List remote target contents with structured options."""
         # Store original path for display purposes
-        original_path = path
-
+        mask = None
         # Handle remote path convention with // prefix
         if _is_remote_path(path):
-            path = _normalize_remote_path(path)
+            path, mask = _normalize_remote_path(path)
         elif not path or path == "/":
             # Default to remote root when no path given or just "/"
             path = ""
@@ -127,89 +138,62 @@ class CommandHandler:
             )
 
         try:
-            if directory:
-                # List the directory itself, not its contents
-                if _is_remote_path(original_path):
-                    display_path = original_path
-                elif original_path == "/" or not original_path:
-                    display_path = "//"
-                else:
-                    display_path = "//" + original_path
-                click.echo(f"{display_path}/")
-                return
+            # Fetch items from remote
+            items = self.client.list_folder(
+                path, mask=mask, recursive=recursive
+            )
 
             if recursive:
-                items = self._list_folder_recursive(path)
+                tree = self._build_recursive_tree(items)
+                self._print_recursive_format(tree)
+
             else:
-                items = self.client.list_folder(path)
 
-            if not show_all:
-                items = [
-                    item for item in items if not item["name"].startswith(".")
-                ]
+                # Apply sorting
+                if sort_by_size:
+                    items = sorted(
+                        items, key=lambda x: x.get("size", 0), reverse=True
+                    )
+                elif sort_by_time:
+                    # Use modified time for sorting,
+                    # handle both string and datetime
+                    def get_modified_time(item):
+                        modified = item.get("modified", "")
+                        if hasattr(modified, "timestamp"):
+                            return modified.timestamp()
+                        elif isinstance(modified, str):
+                            return modified
+                        else:
+                            return ""
 
-            # Apply sorting
-            if sort_by_size:
-                items = sorted(
-                    items, key=lambda x: x.get("size", 0), reverse=True
-                )
-            elif sort_by_time:
-                # Use modified time for sorting, handle both string and datetime
-                def get_modified_time(item):
-                    modified = item.get("modified", "")
-                    if hasattr(modified, "timestamp"):
-                        return modified.timestamp()
-                    elif isinstance(modified, str):
-                        return modified
-                    else:
-                        return ""
+                    items = sorted(items, key=get_modified_time, reverse=True)
+                else:
+                    # Default sort by name
+                    items = sorted(items, key=lambda x: x["name"])
 
-                items = sorted(items, key=get_modified_time, reverse=True)
-            else:
-                # Default sort by name
-                items = sorted(items, key=lambda x: x["name"])
+                # Apply reverse only after all other sorting
+                if reverse:
+                    items = items[::-1]
 
-            # Apply reverse only after all other sorting
-            if reverse:
-                items = items[::-1]
-
-            if long_format:
-                self._print_long_format(items)
-            else:
-                self._print_simple_format(items)
+                if long_format:
+                    self._print_long_format(items)
+                else:
+                    self._print_simple_format(items)
 
         except Exception as e:
             click.echo(f"ls: {e}", err=True)
             raise
 
-    def _list_folder_recursive(self, path: str) -> List[dict]:
-        """List folder contents recursively."""
-        all_items = []
-
-        def _collect_items(current_path: str) -> None:
-            try:
-                items = self.client.list_folder(current_path)
-                for item in items:
-                    if item["type"] == "file":
-                        item = item.copy()
-                        item["name"] = item["path"]
-
-                    if not item["name"].startswith("/"):
-                        item["name"] = f"/{item['name']}"
-
-                    all_items.append(item)
-
-                    # If it's a folder, recurse into it
-                    if item["type"] == "folder":
-                        folder_path = item["path"]
-                        _collect_items(folder_path)
-
-            except Exception:
-                # Skip folders we can't access
-                pass
-
-        _collect_items(path)
-        return all_items
+    def _build_recursive_tree(self, items: List[dict]) -> dict:
+        """Build a tree structure for recursive listing."""
+        tree = {}
+        for item in items:
+            dir_path = item["dir"] if item["dir"] else "/"
+            if dir_path not in tree:
+                tree[dir_path] = []
+            if item["type"] == "file":
+                tree[dir_path].append(item)
+        return tree
 
     def cp_with_options(
         self,
@@ -254,88 +238,6 @@ class CommandHandler:
             try:
                 self._copy_file_or_folder(
                     source, destination, recursive, treat_as_file
-                )
-            except Exception as e:
-                click.echo(f"cp: {e}", err=True)
-                raise
-
-    def cp(self, args: Tuple[str, ...]) -> None:
-        """Copy contents from one location to another. Mimic Linux cp."""
-        if len(args) < 2:
-            click.echo("cp: missing file operand", err=True)
-            raise click.ClickException("cp requires source and destination")
-
-        recursive = False
-        treat_target_as_file = False  # -T flag
-        target_directory = None  # -t flag
-        sources = []
-        destination = None
-
-        # Parse arguments
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            if arg.startswith("-"):
-                # Handle flags
-                if arg == "-T":
-                    treat_target_as_file = True
-                elif arg == "-t":
-                    # Next argument is the target directory
-                    i += 1
-                    if i >= len(args):
-                        click.echo(
-                            "cp: option requires an argument -- 't'", err=True
-                        )
-                        raise click.ClickException(
-                            "cp: -t requires directory argument"
-                        )
-                    target_directory = args[i]
-                elif "r" in arg or "R" in arg:
-                    recursive = True
-                elif "T" in arg:
-                    treat_target_as_file = True
-                elif "t" in arg:
-                    # Combined flag like -rt, need to get directory next
-                    i += 1
-                    if i >= len(args):
-                        click.echo(
-                            "cp: option requires an argument -- 't'", err=True
-                        )
-                        raise click.ClickException(
-                            "cp: -t requires directory argument"
-                        )
-                    target_directory = args[i]
-            else:
-                sources.append(arg)
-            i += 1
-
-        # Handle different cp command forms
-        if target_directory is not None:
-            # Form: cp -t DIRECTORY SOURCE ...
-            destination = target_directory
-            if not sources:
-                click.echo("cp: missing file operand", err=True)
-                raise click.ClickException("cp: -t requires source files")
-        elif treat_target_as_file:
-            # Form: cp -T SOURCE DEST
-            if len(sources) != 2:
-                click.echo("cp: -T requires exactly two arguments", err=True)
-                raise click.ClickException(
-                    "cp: -T requires exactly one source and one destination"
-                )
-            destination = sources.pop()
-        else:
-            # Form: cp SOURCE ... DIRECTORY (traditional form)
-            if len(sources) < 2:
-                click.echo("cp: missing file operand", err=True)
-                raise click.ClickException("cp requires source and destination")
-            destination = sources.pop()
-
-        # Perform the copy operations
-        for source in sources:
-            try:
-                self._copy_file_or_folder(
-                    source, destination, recursive, treat_target_as_file
                 )
             except Exception as e:
                 click.echo(f"cp: {e}", err=True)
@@ -488,23 +390,35 @@ class CommandHandler:
         """Print items in simple format."""
         for item in items:  # Don't sort here, items are already sorted
             if item["type"] == "folder":
-                click.echo(f"{item['name']}/")
+                text = click.style(f"{item['name']}/", fg="yellow", bold=True)
+                click.echo(text)
             else:
                 click.echo(item["name"])
+
+    def _print_recursive_format(self, items: dict) -> None:
+        """Print items in recursive format."""
+        for dir_path in sorted(items.keys()):
+            dir_name = os.path.basename(dir_path) if dir_path != "/" else "/"
+            space = " | " * (dir_path.count("/") - 1)
+            click.echo(f"{space}{dir_name}:")
+            dir_items = items[dir_path]
+            if dir_items:
+                space = " | " * (dir_path.count("/"))
+                for item in sorted(dir_items, key=lambda x: x["name"]):
+                    click.echo(f"{space}{item['name']}")
 
     def _print_long_format(self, items: List[dict]) -> None:
         """Print items in long format."""
         for item in items:  # Don't sort here, items are already sorted
             if item["type"] == "folder":
-                click.echo(f"drwxr-xr-x   - -       -  {item['name']}/")
+                text = click.style(f"{item['name']}/", fg="yellow", bold=True)
+                click.echo(text)
             else:
                 size = item.get("size", 0)
                 modified = item.get("modified", "unknown")
                 if hasattr(modified, "strftime"):
                     modified = modified.strftime("%Y-%m-%d %H:%M")
-                click.echo(
-                    f"-rw-r--r--   - -   {size:>8}  {modified}  {item['name']}"
-                )
+                click.echo(f"{item['name']}\t{size:>8}\t{modified}")
 
     def _copy_file_or_folder(
         self,

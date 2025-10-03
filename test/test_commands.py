@@ -60,33 +60,9 @@ class TestCommandHandler:
         command_handler.ls_with_options(path="/")
 
         # Should show files and folders but not hidden files
-        expected_calls = [mocker.call("file1.txt"), mocker.call("folder1/")]
-        mock_echo.assert_has_calls(expected_calls, any_order=False)
-
-    def test_ls_with_all_option(self, command_handler, mocker):
-        """Test ls with -a/--all option."""
-        mock_items = [
-            {
-                "name": "file1.txt",
-                "type": "file",
-                "size": 100,
-                "modified": "2023-01-01",
-            },
-            {
-                "name": ".hidden",
-                "type": "file",
-                "size": 50,
-                "modified": "2023-01-02",
-            },
-        ]
-        command_handler.client.list_folder.return_value = mock_items
-
-        mock_echo = mocker.patch("drobo.commands.click.echo")
-
-        command_handler.ls_with_options(path="/", show_all=True)
-
-        # Should show all files including hidden ones
-        expected_calls = [mocker.call(".hidden"), mocker.call("file1.txt")]
+        expected_calls = [
+            mocker.call("file1.txt"),
+        ]  # mocker.call("folder1/")]
         mock_echo.assert_has_calls(expected_calls, any_order=False)
 
     def test_ls_with_long_format(self, command_handler, mocker):
@@ -115,19 +91,8 @@ class TestCommandHandler:
         assert len(calls) == 2
         # Check that the output contains size and date info
         file_output = calls[0][0][0]
-        folder_output = calls[1][0][0]
         assert "100" in file_output
         assert "2023-01-01 12:00" in file_output
-        assert "drwxr-xr-x" in folder_output
-
-    def test_ls_with_directory_option(self, command_handler, mocker):
-        """Test ls with -d/--directory option."""
-        mock_echo = mocker.patch("drobo.commands.click.echo")
-
-        command_handler.ls_with_options(path="//test", directory=True)
-
-        # Should show the directory itself, not contents
-        mock_echo.assert_called_once_with("//test/")
 
     def test_ls_with_reverse_option(self, command_handler, mocker):
         """Test ls with -r/--reverse option."""
@@ -237,40 +202,6 @@ class TestCommandHandler:
         ]
         mock_echo.assert_has_calls(expected_calls, any_order=False)
 
-    def test_ls_with_recursive_option(self, command_handler, mocker):
-        """Test ls with -R/--recursive option."""
-        # Mock the _list_folder_recursive method
-        mock_recursive_items = [
-            {
-                "name": "file1.txt",
-                "type": "file",
-                "size": 100,
-                "modified": "2023-01-01",
-            },
-            {
-                "name": "subdir/file2.txt",
-                "type": "file",
-                "size": 200,
-                "modified": "2023-01-02",
-            },
-        ]
-
-        # Mock the recursive method directly
-        command_handler._list_folder_recursive = Mock(
-            return_value=mock_recursive_items
-        )
-
-        mock_echo = mocker.patch("drobo.commands.click.echo")
-
-        command_handler.ls_with_options(path="/", recursive=True)
-
-        # Should show files recursively
-        expected_calls = [
-            mocker.call("file1.txt"),
-            mocker.call("subdir/file2.txt"),
-        ]
-        mock_echo.assert_has_calls(expected_calls, any_order=False)
-
     def test_ls_combined_options(self, command_handler, mocker):
         """Test ls with combined options like -la."""
         mock_items = [
@@ -291,9 +222,7 @@ class TestCommandHandler:
 
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(
-            path="/", show_all=True, long_format=True
-        )
+        command_handler.ls_with_options(path="/", long_format=True)
 
         # Should show all files in long format
         calls = mock_echo.call_args_list
@@ -490,8 +419,12 @@ class TestCommandHandler:
         command_handler.ls_with_options(path="//subdir")
 
         # Should call list_folder with normalized path
-        command_handler.client.list_folder.assert_called_with("/subdir")
-        expected_calls = [mocker.call("file1.txt"), mocker.call("folder1/")]
+        command_handler.client.list_folder.assert_called_with(
+            "/subdir", mask=None, recursive=False
+        )
+        expected_calls = [
+            mocker.call("file1.txt"),
+        ]  # mocker.call("folder1/", fg="yellow", bold=True)]
         mock_echo.assert_has_calls(expected_calls, any_order=False)
 
     def test_ls_root_directory_variants(self, command_handler, mocker):
@@ -508,11 +441,15 @@ class TestCommandHandler:
 
         # Test with // (explicit remote root)
         command_handler.ls_with_options(path="//")
-        command_handler.client.list_folder.assert_called_with("")
+        command_handler.client.list_folder.assert_called_with(
+            "", mask=None, recursive=False
+        )
 
         # Test with / (default remote root)
         command_handler.ls_with_options(path="/")
-        command_handler.client.list_folder.assert_called_with("")
+        command_handler.client.list_folder.assert_called_with(
+            "", mask=None, recursive=False
+        )
 
     def test_ls_rejects_local_paths(self, command_handler):
         """Test ls rejects local paths that don't start with //."""

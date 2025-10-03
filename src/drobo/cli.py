@@ -95,19 +95,6 @@ def get_command_handler(ctx):
 @cli.command()
 @click.argument("path", default="/")
 @click.option(
-    "-a",
-    "--all",
-    "show_all",
-    is_flag=True,
-    help="do not ignore entries starting with '.'",
-)
-@click.option(
-    "-d",
-    "--directory",
-    is_flag=True,
-    help="list directories themselves, not their contents",
-)
-@click.option(
     "-l", "long_format", is_flag=True, help="use a long listing format"
 )
 @click.option(
@@ -126,8 +113,6 @@ def get_command_handler(ctx):
 def ls(
     ctx,
     path: str,
-    show_all: bool,
-    directory: bool,
     long_format: bool,
     reverse: bool,
     recursive: bool,
@@ -139,8 +124,6 @@ def ls(
         command_handler = get_command_handler(ctx)
         command_handler.ls_with_options(
             path=path,
-            show_all=show_all,
-            directory=directory,
             long_format=long_format,
             reverse=reverse,
             recursive=recursive,
