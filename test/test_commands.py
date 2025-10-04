@@ -259,11 +259,18 @@ class TestCommandHandler:
         mock_normalize_local_path = mocker.patch(
             "drobo.commands._normalize_local_path"
         )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
 
         # Simulate local to remote copy
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
-        mock_normalize_remote_path.return_value = "/dest_file"
-        mock_normalize_local_path.return_value = "/home/user/source_file"
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
+        mock_normalize_remote_path.return_value = ("/dest_file", None)
+        mock_normalize_local_path.return_value = (
+            "/home/user/source_file",
+            None,
+        )
 
         # Mock os.path methods
         mocker.patch("os.path.isfile", return_value=True)
@@ -289,13 +296,17 @@ class TestCommandHandler:
         mock_normalize_local_path = mocker.patch(
             "drobo.commands._normalize_local_path"
         )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
 
         # Simulate local to remote copy
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
-        mock_normalize_remote_path.return_value = "/target_dir"
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
+        mock_normalize_remote_path.return_value = ("/target_dir", None)
         mock_normalize_local_path.side_effect = [
-            "/home/user/file1",
-            "/home/user/file2",
+            ("/home/user/file1", None),
+            ("/home/user/file2", None),
         ]
 
         # Mock os.path methods
@@ -324,11 +335,15 @@ class TestCommandHandler:
         mock_normalize_local_path = mocker.patch(
             "drobo.commands._normalize_local_path"
         )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
 
         # Test remote to local copy
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
-        mock_normalize_remote_path.return_value = "/remote/file"
-        mock_normalize_local_path.return_value = "/home/user/local_file"
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
+        mock_normalize_remote_path.return_value = ("/remote/file", None)
+        mock_normalize_local_path.return_value = ("/home/user/local_file", None)
 
         # Mock client methods
         mock_get_metadata = mocker.patch.object(
@@ -357,11 +372,15 @@ class TestCommandHandler:
         mock_normalize_remote_path = mocker.patch(
             "drobo.commands._normalize_remote_path"
         )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
 
         # Local directory to remote
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
-        mock_normalize_local_path.return_value = "/home/user/local_dir"
-        mock_normalize_remote_path.return_value = "/remote_dir"
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
+        mock_normalize_local_path.return_value = ("/home/user/local_dir", None)
+        mock_normalize_remote_path.return_value = ("/remote_dir", None)
 
         mocker.patch("os.path.isdir", return_value=True)
         mocker.patch("os.path.isfile", return_value=False)
@@ -383,12 +402,16 @@ class TestCommandHandler:
         mock_normalize_local_path = mocker.patch(
             "drobo.commands._normalize_local_path"
         )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
 
         # Both paths are local
         mock_is_remote_path.return_value = False
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
         mock_normalize_local_path.side_effect = [
-            "/home/user/file1",
-            "/home/user/file2",
+            ("/home/user/file1", None),
+            ("/home/user/file2", None),
         ]
 
         with pytest.raises(Exception) as exc_info:
@@ -399,6 +422,163 @@ class TestCommandHandler:
         assert "not used for copying local files to local destinations" in str(
             exc_info.value
         )
+
+    def test_cp_with_local_wildcard(self, command_handler, mocker):
+        """Test cp with local file wildcards."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_normalize_local_path = mocker.patch(
+            "drobo.commands._normalize_local_path"
+        )
+
+        # Simulate local wildcard to remote copy
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_has_wildcards.side_effect = lambda x: "*" in x
+        mock_glob.return_value = [
+            "/home/user/file1.pdf",
+            "/home/user/file2.pdf",
+        ]
+        mock_normalize_remote_path.return_value = ("/remote_dir", None)
+        mock_normalize_local_path.side_effect = [
+            ("/home/user/file1.pdf", None),
+            ("/home/user/file2.pdf", None),
+        ]
+
+        # Mock os.path and client methods
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("os.path.isdir", return_value=False)
+        mock_upload = mocker.patch.object(command_handler.client, "upload_file")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=True
+        )
+
+        command_handler.cp_with_options(
+            sources=("/home/user/*.pdf", "//remote_dir")
+        )
+
+        # Should upload both matched files
+        assert mock_upload.call_count == 2
+
+    def test_cp_with_remote_wildcard(self, command_handler, mocker):
+        """Test cp with remote file wildcards."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_normalize_local_path = mocker.patch(
+            "drobo.commands._normalize_local_path"
+        )
+        mock_list_folder = mocker.patch.object(
+            command_handler.client, "list_folder"
+        )
+
+        # Simulate remote wildcard to local copy
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_has_wildcards.side_effect = lambda x: "*" in x
+        mock_normalize_remote_path.side_effect = [
+            ("/subdir", "^.*\\.pdf$"),
+            ("/subdir/file1.pdf", None),
+            ("/subdir/file2.pdf", None),
+        ]
+        mock_normalize_local_path.side_effect = [
+            ("/local_dir", None),
+            ("/subdir/file1.pdf", None),
+            ("/subdir/file2.pdf", None),
+        ]
+
+        # Mock list_folder to return pdf files
+        mock_list_folder.return_value = [
+            {
+                "name": "file1.pdf",
+                "type": "file",
+                "path": "/subdir/file1.pdf",
+            },
+            {
+                "name": "file2.pdf",
+                "type": "file",
+                "path": "/subdir/file2.pdf",
+            },
+        ]
+
+        # Mock os.path and client methods
+        mocker.patch("os.path.isdir", return_value=True)
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {"type": "file"}
+        mock_download = mocker.patch.object(
+            command_handler.client, "download_file"
+        )
+
+        command_handler.cp_with_options(
+            sources=("//subdir/*.pdf", "/local_dir")
+        )
+
+        # Should download both matched files
+        assert mock_download.call_count == 2
+
+    def test_cp_mixed_source_types_error(self, command_handler, mocker):
+        """Test cp rejects mixed remote and local sources."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
+
+        # Mix of remote and local
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.cp_with_options(
+                sources=("/home/user/file1", "//remote/file2", "/dest")
+            )
+
+        assert "cannot mix remote and local source files" in str(exc_info.value)
+
+    def test_cp_multiple_files_non_directory_dest_error(
+        self, command_handler, mocker
+    ):
+        """Test cp rejects multiple files to non-directory destination."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_glob = mocker.patch("glob.glob")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_normalize_local_path = mocker.patch(
+            "drobo.commands._normalize_local_path"
+        )
+
+        # Simulate multiple local files to remote non-directory
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_has_wildcards.return_value = False
+        mock_glob.return_value = []
+        mock_normalize_local_path.side_effect = [
+            ("/home/user/file1", None),
+            ("/home/user/file2", None),
+        ]
+        mock_normalize_remote_path.return_value = ("/remote_file", None)
+
+        # Mock destination as non-directory
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=False
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.cp_with_options(
+                sources=(
+                    "/home/user/file1",
+                    "/home/user/file2",
+                    "//remote_file",
+                )
+            )
+
+        assert "is not a directory" in str(exc_info.value)
 
     def test_ls_remote_path_convention(self, command_handler, mocker):
         """Test ls with // remote path convention."""

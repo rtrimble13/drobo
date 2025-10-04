@@ -165,9 +165,12 @@ def cp(
     drobo <app name> cp [options] -t DIRECTORY SOURCE ...
 
     Remote paths begin with //, local paths follow Linux conventions.
+    Wildcards (*,?) are supported in SOURCE paths.
+    All SOURCE files must be either remote or local (cannot mix).
 
     Examples:
     drobo myapp cp ~/file1 //          Copy local file to remote root
+    drobo myapp cp //subdir/*.pdf .    Copy remote PDFs to current dir
     drobo myapp cp -T //subdir/file2 ../file2    Copy remote to local
     drobo myapp cp -rt ./local_dir //subdir1 //subdir2   Copy remote dirs
     """

@@ -233,8 +233,25 @@ class CommandHandler:
                 raise click.ClickException("cp requires source and destination")
             destination = source_list.pop()
 
+        # Expand wildcards in sources
+        expanded_sources = self._expand_source_wildcards(source_list)
+
+        if not expanded_sources:
+            click.echo("cp: no files matched", err=True)
+            raise click.ClickException("cp: no files matched")
+
+        # Validate all sources are either remote or local
+        self._validate_source_consistency(expanded_sources)
+
+        # Check if we need to validate destination directory existence
+        # (when copying multiple files, destination must be a directory)
+        if len(expanded_sources) > 1 and not treat_as_file:
+            self._validate_destination_for_multiple_files(
+                expanded_sources, destination, recursive
+            )
+
         # Perform the copy operations
-        for source in source_list:
+        for source in expanded_sources:
             try:
                 self._copy_file_or_folder(
                     source, destination, recursive, treat_as_file
@@ -255,14 +272,14 @@ class CommandHandler:
             dest_is_remote = _is_remote_path(destination)
 
             if source_is_remote:
-                source_path = _normalize_remote_path(source)
+                source_path, _ = _normalize_remote_path(source)
             else:
-                source_path = _normalize_local_path(source)
+                source_path, _ = _normalize_local_path(source)
 
             if dest_is_remote:
-                dest_path = _normalize_remote_path(destination)
+                dest_path, _ = _normalize_remote_path(destination)
             else:
-                dest_path = _normalize_local_path(destination)
+                dest_path, _ = _normalize_local_path(destination)
 
             # Handle different move operations
             if source_is_remote and dest_is_remote:
@@ -334,7 +351,7 @@ class CommandHandler:
             try:
                 # Normalize path based on conventions
                 if _is_remote_path(file_path):
-                    remote_path = _normalize_remote_path(file_path)
+                    remote_path, _ = _normalize_remote_path(file_path)
                 else:
                     # rm only works on remote files
                     raise ValueError(
@@ -420,6 +437,73 @@ class CommandHandler:
                     modified = modified.strftime("%Y-%m-%d %H:%M")
                 click.echo(f"{item['name']}\t{size:>8}\t{modified}")
 
+    def _expand_source_wildcards(self, sources: list) -> list:
+        """Expand wildcards in source paths."""
+        import glob
+
+        expanded = []
+        for source in sources:
+            if _is_remote_path(source):
+                # Handle remote wildcards
+                base_path, mask = _normalize_remote_path(source)
+                if mask:
+                    # List files in the directory and filter by mask
+                    try:
+                        items = self.client.list_folder(base_path, mask=mask)
+                        for item in items:
+                            # Add the full path with // prefix
+                            expanded.append("//" + item["path"].lstrip("/"))
+                    except Exception as e:
+                        raise ValueError(
+                            f"Cannot expand wildcard '{source}': {e}"
+                        )
+                else:
+                    # No wildcard, add as-is
+                    expanded.append(source)
+            else:
+                # Handle local wildcards
+                if _has_wildcards(source):
+                    matches = glob.glob(source)
+                    if matches:
+                        expanded.extend(matches)
+                    # If no matches, the error will be caught later
+                else:
+                    # No wildcard, add as-is
+                    expanded.append(source)
+
+        return expanded
+
+    def _validate_source_consistency(self, sources: list) -> None:
+        """Validate that all sources are either remote or local."""
+        if not sources:
+            return
+
+        first_is_remote = _is_remote_path(sources[0])
+        for source in sources[1:]:
+            if _is_remote_path(source) != first_is_remote:
+                raise ValueError("cp: cannot mix remote and local source files")
+
+    def _validate_destination_for_multiple_files(
+        self, sources: list, destination: str, recursive: bool
+    ) -> None:
+        """Validate destination when copying multiple files."""
+        dest_is_remote = _is_remote_path(destination)
+
+        if dest_is_remote:
+            # Check if remote destination is a directory
+            dest_path, _ = _normalize_remote_path(destination)
+            if not self._is_remote_directory(dest_path):
+                raise ValueError(
+                    f"cp: target '{destination}' is not a directory"
+                )
+        else:
+            # Check if local destination is a directory
+            dest_path, _ = _normalize_local_path(destination)
+            if not os.path.isdir(dest_path):
+                raise ValueError(
+                    f"cp: target '{destination}' is not a directory"
+                )
+
     def _copy_file_or_folder(
         self,
         source: str,
@@ -433,14 +517,14 @@ class CommandHandler:
         dest_is_remote = _is_remote_path(destination)
 
         if source_is_remote:
-            source_path = _normalize_remote_path(source)
+            source_path, _ = _normalize_remote_path(source)
         else:
-            source_path = _normalize_local_path(source)
+            source_path, _ = _normalize_local_path(source)
 
         if dest_is_remote:
-            dest_path = _normalize_remote_path(destination)
+            dest_path, _ = _normalize_remote_path(destination)
         else:
-            dest_path = _normalize_local_path(destination)
+            dest_path, _ = _normalize_local_path(destination)
 
         # Determine operation type
         if source_is_remote and dest_is_remote:
@@ -521,7 +605,16 @@ class CommandHandler:
                     raise ValueError(
                         f"'{source}' is a directory (use -r for recursive copy)"
                     )
-                self._download_directory_recursive(source, destination)
+                # Handle directory copy based on use case 2
+                source_dir_name = os.path.basename(source.rstrip("/"))
+                if os.path.exists(destination):
+                    # Destination exists, create subdirectory with source's name
+                    actual_dest = os.path.join(destination, source_dir_name)
+                else:
+                    # Destination doesn't exist, create it and copy directly
+                    actual_dest = destination
+
+                self._download_directory_contents(source, actual_dest)
             else:
                 raise ValueError(f"'{source}': Unknown file type")
         except Exception:
@@ -568,22 +661,28 @@ class CommandHandler:
         except Exception:
             return False
 
-    def _download_directory_recursive(
-        self, remote_dir: str, local_base: str
+    def _download_directory_contents(
+        self, remote_dir: str, local_dest: str
     ) -> None:
-        """Download a directory recursively."""
-        os.makedirs(local_base, exist_ok=True)
+        """Download directory contents recursively into local_dest."""
+        os.makedirs(local_dest, exist_ok=True)
 
         items = self.client.list_folder(remote_dir)
         for item in items:
             if item["type"] == "file":
-                local_path = os.path.join(local_base, item["name"])
+                local_path = os.path.join(local_dest, item["name"])
                 remote_path = item["path"]
                 self.client.download_file(remote_path, local_path)
             elif item["type"] == "folder":
-                local_subdir = os.path.join(local_base, item["name"])
+                local_subdir = os.path.join(local_dest, item["name"])
                 remote_subdir = item["path"]
-                self._download_directory_recursive(remote_subdir, local_subdir)
+                self._download_directory_contents(remote_subdir, local_subdir)
+
+    def _download_directory_recursive(
+        self, remote_dir: str, local_base: str
+    ) -> None:
+        """Download a directory recursively (legacy wrapper)."""
+        self._download_directory_contents(remote_dir, local_base)
 
     def _copy_directory_recursive_remote(
         self, remote_source: str, remote_dest: str

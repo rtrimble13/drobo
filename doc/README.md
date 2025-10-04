@@ -59,22 +59,49 @@ drobo myapp ls -S /Documents      # sort by file size
 ### cp - Copy Files
 
 ```bash
-drobo <app> cp [options] <source> <destination>
+drobo <app> cp [options] SOURCE ... DEST
+drobo <app> cp [options] -T SOURCE DEST
+drobo <app> cp [options] -t DIRECTORY SOURCE ...
 ```
 
 Options:
-- `-r`: Recursive copy for directories
+- `-r, --recursive`: Copy directories recursively
+- `-T`: Treat DEST as a normal file
+- `-t, --target-directory=DIRECTORY`: Copy all SOURCE arguments into DIRECTORY
+
+**Important Notes:**
+- Remote paths begin with `//`, local paths follow Linux conventions
+- SOURCE files must all be remote or all be local (cannot mix)
+- Wildcards are supported in SOURCE (e.g., `*.pdf`, `file?.txt`)
+- When copying multiple files, DEST must be a directory
+- Local-to-local copies are not supported (use standard `cp` command)
 
 Examples:
 ```bash
 # Upload local file to Dropbox
-drobo myapp cp local_file.txt /remote_file.txt
+drobo myapp cp ~/file.txt //remote_file.txt
 
 # Download from Dropbox to local
-drobo myapp cp /remote_file.txt local_file.txt
+drobo myapp cp //remote_file.txt ~/local_file.txt
 
 # Copy within Dropbox (remote to remote)
-drobo myapp cp /source.txt /destination.txt
+drobo myapp cp //source.txt //destination.txt
+
+# Copy multiple files using wildcards
+drobo myapp cp //subdir/*.pdf .
+drobo myapp cp ~/Documents/*.txt //backup/
+
+# Recursive directory copy
+drobo myapp cp -r //remote_dir ./local_dir
+
+# If local_dir exists, creates ./local_dir/remote_dir/
+# If local_dir doesn't exist, creates it and copies contents directly
+
+# Use -t flag to specify target directory first
+drobo myapp cp -t //target_dir ~/file1.txt ~/file2.txt
+
+# Use -T flag to treat destination as a file
+drobo myapp cp -T //source/file.txt //dest_file.txt
 ```
 
 ### mv - Move/Rename Files
