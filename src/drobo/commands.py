@@ -27,8 +27,8 @@ def _normalize_remote_path(path: str) -> Tuple[str, str]:
     Dropbox API paths start with / and do not have // prefix.
     returns: (normalized_path, wildcard_pattern or None)
     """
-    if not path:
-        return ("/", None)  # Empty path means root in Dropbox API
+    if not path or path in ["//", "/"]:
+        return ("", None)  # Empty path means root in Dropbox API
 
     base, mask = "", None
     if _has_wildcards(path):
@@ -80,6 +80,7 @@ def _get_wildcard_regex(pattern: str) -> str:
         .replace(r"\?", ".")
         .replace(r"\[", "[")
         .replace(r"\]", "]")
+        .replace(r"\-", "-")
     )
     return f"^{regex_pattern}$"
 
@@ -460,17 +461,21 @@ class CommandHandler:
                     # No wildcard, add as-is
                     expanded.append(source)
             else:
-                base_path, mask = _normalize_local_path(source)
+                # expand local sources
+                matches = glob.glob(source)
+                if matches:
+                    expanded.extend(matches)
+#                base_path, mask = _normalize_local_path(source)
                 # Handle local wildcards
-                if mask:
-                    base_path = base_path + "/" + mask
-                    matches = glob.glob(base_path)
-                    if matches:
-                        expanded.extend(matches)
+#                if mask:
+#                    base_path = base_path + "/" + mask
+#                    matches = glob.glob(base_path)
+#                    if matches:
+#                        expanded.extend(matches)
                     # If no matches, the error will be caught later
-                else:
+#                else:
                     # No wildcard, add as-is
-                    expanded.append(base_path)
+#                    expanded.append(base_path)
 
         return expanded
 
@@ -493,7 +498,7 @@ class CommandHandler:
         if dest_is_remote:
             # Check if remote destination is a directory
             dest_path, _ = _normalize_remote_path(destination)
-            if not self._is_remote_directory(dest_path):
+            if not self._is_remote_directory(dest_path.rstrip("/")):
                 raise ValueError(
                     f"cp: target '{destination}' is not a directory"
                 )

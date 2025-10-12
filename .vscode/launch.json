@@ -13,13 +13,22 @@
             "args": "${command:pickArgs}"
         },
         {
-            "name": "Python Debugger: Drobo w/ inputs",
+            "name": "Python Debugger: Drobo ls",
             "type": "debugpy",
             "request": "launch",
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/src/drobo/cli.py",
             "console": "integratedTerminal",
-            "args": ["sput", "cp", "-r", "./var", "//"]
+            "args": ["sput", "ls", "//var/tmp/2025-07*"]
+        },
+        {
+            "name": "Python Debugger: Drobo cp",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/src/drobo/cli.py",
+            "console": "integratedTerminal",
+            "args": ["sput", "cp", "./var/tmp/2025-07*", "//var/tmp/"]
         }
     ]
 }
