@@ -271,3 +271,17 @@ class DropboxClient:
         except ApiError as e:
             logger.error(f"API error deleting '{path}': {e}")
             raise
+
+    def create_folder(self, path: str) -> None:
+        """Create a folder."""
+        try:
+            self._client.files_create_folder_v2(path)
+            logger.info(f"Created folder {path}")
+
+        except AuthError as e:
+            self._handle_auth_error(e)
+            # Retry after token refresh
+            self.create_folder(path)
+        except ApiError as e:
+            logger.error(f"API error creating folder '{path}': {e}")
+            raise

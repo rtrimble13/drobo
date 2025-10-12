@@ -28,7 +28,7 @@ def _normalize_remote_path(path: str) -> Tuple[str, str]:
     returns: (normalized_path, wildcard_pattern or None)
     """
     if not path:
-        return ("", None)  # Empty path means root in Dropbox API
+        return ("/", None)  # Empty path means root in Dropbox API
 
     base, mask = "", None
     if _has_wildcards(path):
@@ -37,11 +37,11 @@ def _normalize_remote_path(path: str) -> Tuple[str, str]:
     else:
         base = path
 
-    # remove all leading //
-    base = re.sub(r"^/+", "", base)
+    # standardize to single leading /
+    base = "/" + re.sub(r"^/+", "", base)
 
-    if base:
-        base = "/" + base  # Ensure leading / for non-root path.
+#    if base:
+#        base = "/" + base  # Ensure leading / for non-root path.
     return (base, _get_wildcard_regex(mask))
 
 
@@ -83,7 +83,6 @@ def _get_wildcard_regex(pattern: str) -> str:
     )
     return f"^{regex_pattern}$"
 
-
 class CommandHandler:
     """Handles all drobo commands."""
 
@@ -114,7 +113,7 @@ class CommandHandler:
 
     def ls_with_options(
         self,
-        path: str = "/",
+        path: str = "//",
         long_format: bool = False,
         reverse: bool = False,
         recursive: bool = False,
@@ -127,7 +126,7 @@ class CommandHandler:
         # Handle remote path convention with // prefix
         if _is_remote_path(path):
             path, mask = _normalize_remote_path(path)
-        elif not path or path == "/":
+        elif not path or path in ["/", "//"]:
             # Default to remote root when no path given or just "/"
             path = ""
         else:
@@ -461,15 +460,17 @@ class CommandHandler:
                     # No wildcard, add as-is
                     expanded.append(source)
             else:
+                base_path, mask = _normalize_local_path(source)
                 # Handle local wildcards
-                if _has_wildcards(source):
-                    matches = glob.glob(source)
+                if mask:
+                    base_path = base_path + "/" + mask
+                    matches = glob.glob(base_path)
                     if matches:
                         expanded.extend(matches)
                     # If no matches, the error will be caught later
                 else:
                     # No wildcard, add as-is
-                    expanded.append(source)
+                    expanded.append(base_path)
 
         return expanded
 
@@ -705,20 +706,30 @@ class CommandHandler:
         self, local_dir: str, remote_base: str
     ) -> None:
         """Upload a directory recursively."""
-        local_path = Path(local_dir)
         remote_base = (
             remote_base if remote_base.startswith("/") else "/" + remote_base
         )
+        # get the base directory name to create under remote_base
+        target_dir_name = os.path.basename(os.path.normpath(local_dir))
+        remote_base = os.path.join(remote_base, target_dir_name).replace("\\", "/")
 
-        for item in local_path.rglob("*"):
-            if item.is_file():
-                relative_path = item.relative_to(local_path)
-                remote_path = f"{remote_base}/{relative_path}".replace(
-                    "\\", "/"
-                )
-                self.client.upload_file(str(item), remote_path)
+        if not self._is_remote_directory(remote_base):
+            self.client.create_folder(remote_base)
 
+        for root, dirs, files in os.walk(local_dir):
+            # Create corresponding remote directory
+            for dir_name in dirs:
+                rel_dir = os.path.relpath(os.path.join(root, dir_name), local_dir)
+                remote_subdir = os.path.join(remote_base, rel_dir).replace("\\", "/")
+                if not self._is_remote_directory(remote_subdir):
+                    self.client.create_folder(remote_subdir)
 
+            for file in files:
+                local_file_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_file_path, local_dir)
+                remote_path = os.path.join(remote_base, relative_path).replace("\\", "/")
+                self.client.upload_file(local_file_path, remote_path)
+        
 def setup_commands(
     app_config: AppConfig, verbose: bool = False
 ) -> CommandHandler:
