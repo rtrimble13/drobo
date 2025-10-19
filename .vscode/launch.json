@@ -19,7 +19,7 @@
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/src/drobo/cli.py",
             "console": "integratedTerminal",
-            "args": ["sput", "ls", "//var/tmp/2025-07*"]
+            "args": ["sput", "ls", "//statements"]
         },
         {
             "name": "Python Debugger: Drobo cp",
@@ -28,7 +28,7 @@
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/src/drobo/cli.py",
             "console": "integratedTerminal",
-            "args": ["sput", "cp", "./var/tmp/2025-07*", "//var/tmp/"]
+            "args": ["sput", "cp", "//var/tmp/2025-07*", "//var/tmp2/"]
         }
     ]
 }

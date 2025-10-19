@@ -2,10 +2,11 @@
 Command handlers for drobo CLI commands.
 """
 
+import fnmatch
+import glob
 import logging
 import os
 import re
-from pathlib import Path
 from typing import List, Tuple
 
 import click
@@ -21,68 +22,32 @@ def _is_remote_path(path: str) -> bool:
     return path.startswith("//")
 
 
-def _normalize_remote_path(path: str) -> Tuple[str, str]:
+def _normalize_remote_path(path: str) -> str:
     """
     Convert remote path from // prefix to Dropbox API format.
     Dropbox API paths start with / and do not have // prefix.
-    returns: (normalized_path, wildcard_pattern or None)
     """
     if not path or path in ["//", "/"]:
-        return ("", None)  # Empty path means root in Dropbox API
+        return ""  # Empty path means root in Dropbox API
 
-    base, mask = "", None
-    if _has_wildcards(path):
-        # Split into base and wildcard part
-        base, mask = os.path.split(path)
-    else:
-        base = path
-
-    # standardize to single leading /
-    base = "/" + re.sub(r"^/+", "", base)
-
-#    if base:
-#        base = "/" + base  # Ensure leading / for non-root path.
-    return (base, _get_wildcard_regex(mask))
+    # format with // prefix
+    normalized_path = os.path.abspath("//" + re.sub(r"^/+", "", path))
+    return normalized_path
 
 
-def _normalize_local_path(path: str) -> Tuple[str, str]:
+def _normalize_local_path(path: str) -> str:
     """Expand and normalize local paths (~, ./, ../, etc)."""
     if not path:
         # Empty path is current directory
-        return (os.path.abspath(os.getcwd()), None)
-
-    base, mask = "", None
-    if _has_wildcards(path):
-        base, mask = os.path.split(path)
+        return os.path.abspath(os.getcwd())
     else:
-        base = path
-
-    if base.startswith("~/"):
-        base = os.path.expanduser(base)
-    else:
-        base = os.path.abspath(base)
-
-    return (base, _get_wildcard_regex(mask))
+        return os.path.abspath(path)
 
 
 def _has_wildcards(path: str) -> bool:
     """Check if the path contains wildcard characters."""
     return bool(re.search(r"[\*\?\[\]]", path))
 
-
-def _get_wildcard_regex(pattern: str) -> str:
-    """Convert a wildcard pattern to a regex pattern."""
-    if not pattern:
-        return None
-    escaped = re.escape(pattern)
-    regex_pattern = (
-        escaped.replace(r"\*", ".*")
-        .replace(r"\?", ".")
-        .replace(r"\[", "[")
-        .replace(r"\]", "]")
-        .replace(r"\-", "-")
-    )
-    return f"^{regex_pattern}$"
 
 class CommandHandler:
     """Handles all drobo commands."""
@@ -93,24 +58,11 @@ class CommandHandler:
         self.config_manager = ConfigManager()
         self.client = DropboxClient(app_config, self.config_manager)
 
-    def _filter_by_mask(
-        self, items: List[dict], mask: str = None, show_all: bool = False
-    ) -> List[dict]:
-        """
-        Filter items by wildcard mask.
-        items: list of item dicts with 'name' key
-        mask: wildcard pattern (e.g. *.txt)
-        show_all: if True, include hidden files (starting with .)
-        returns: filtered list of items
-        """
-        if mask:
-            regex = re.compile(mask)
-            filtered = [item for item in items if regex.match(item["name"])]
-        if not show_all:
-            filtered = [
-                item for item in items if not item["name"].startswith(".")
-            ]
-        return filtered
+    def _filter_remote_paths(self, items: List[dict], mask: str) -> List[dict]:
+        """Filter items by mask using fnmatch."""
+        if not mask:
+            return items
+        return [item for item in items if fnmatch.fnmatch(item["name"], mask)]
 
     def ls_with_options(
         self,
@@ -122,26 +74,32 @@ class CommandHandler:
         sort_by_time: bool = False,
     ) -> None:
         """List remote target contents with structured options."""
+        # First check to make sure it is not a local path
+        if not _is_remote_path(path):
+            click.echo(
+                "ls: local paths are not supported.  "
+                "Use standard 'ls' for local paths."
+                "\nUse drobo 'ls' for remote paths only (starting with //)",
+                err=True,
+            )
+            raise click.ClickException("ls requires a remote path")
         # Store original path for display purposes
         mask = None
-        # Handle remote path convention with // prefix
-        if _is_remote_path(path):
-            path, mask = _normalize_remote_path(path)
-        elif not path or path in ["/", "//"]:
-            # Default to remote root when no path given or just "/"
-            path = ""
-        else:
-            # All other paths are not supported
-            raise ValueError(
-                f"Local paths not supported in ls command. Use // for "
-                f"remote paths. Got: {path}"
-            )
+        path = _normalize_remote_path(path)
+
+        if path:
+            path = path[1:]  # remove leading /
+
+        # check for wildcards in the last path component
+        if _has_wildcards(path):
+            path, mask = os.path.split(path)
 
         try:
             # Fetch items from remote
-            items = self.client.list_folder(
-                path, mask=mask, recursive=recursive
-            )
+            items = self.client.list_folder(path, recursive=recursive)
+
+            if mask:
+                items = self._filter_remote_paths(items, mask)
 
             if recursive:
                 tree = self._build_recursive_tree(items)
@@ -439,20 +397,24 @@ class CommandHandler:
 
     def _expand_source_wildcards(self, sources: list) -> list:
         """Expand wildcards in source paths."""
-        import glob
 
         expanded = []
         for source in sources:
             if _is_remote_path(source):
                 # Handle remote wildcards
-                base_path, mask = _normalize_remote_path(source)
-                if mask:
+                path = _normalize_remote_path(source)
+                if _has_wildcards(path):
                     # List files in the directory and filter by mask
                     try:
-                        items = self.client.list_folder(base_path, mask=mask)
+                        dir_name, mask = os.path.split(path[1:])
+                        items = self._filter_remote_paths(
+                            self.client.list_folder(dir_name), mask
+                        )
                         for item in items:
                             # Add the full path with // prefix
-                            expanded.append("//" + item["path"].lstrip("/"))
+                            expanded.append(
+                                _normalize_remote_path(item["path"])
+                            )
                     except Exception as e:
                         raise ValueError(
                             f"Cannot expand wildcard '{source}': {e}"
@@ -465,17 +427,6 @@ class CommandHandler:
                 matches = glob.glob(source)
                 if matches:
                     expanded.extend(matches)
-#                base_path, mask = _normalize_local_path(source)
-                # Handle local wildcards
-#                if mask:
-#                    base_path = base_path + "/" + mask
-#                    matches = glob.glob(base_path)
-#                    if matches:
-#                        expanded.extend(matches)
-                    # If no matches, the error will be caught later
-#                else:
-                    # No wildcard, add as-is
-#                    expanded.append(base_path)
 
         return expanded
 
@@ -497,14 +448,14 @@ class CommandHandler:
 
         if dest_is_remote:
             # Check if remote destination is a directory
-            dest_path, _ = _normalize_remote_path(destination)
-            if not self._is_remote_directory(dest_path.rstrip("/")):
+            dest_path = _normalize_remote_path(destination)
+            if not self._is_remote_directory(dest_path[1:]):
                 raise ValueError(
                     f"cp: target '{destination}' is not a directory"
                 )
         else:
             # Check if local destination is a directory
-            dest_path, _ = _normalize_local_path(destination)
+            dest_path = _normalize_local_path(destination)
             if not os.path.isdir(dest_path):
                 raise ValueError(
                     f"cp: target '{destination}' is not a directory"
@@ -523,14 +474,18 @@ class CommandHandler:
         dest_is_remote = _is_remote_path(destination)
 
         if source_is_remote:
-            source_path, _ = _normalize_remote_path(source)
+            source_path = _normalize_remote_path(source)
+            if source_path:
+                source_path = source_path[1:]  # remove leading /
         else:
-            source_path, _ = _normalize_local_path(source)
+            source_path = _normalize_local_path(source)
 
         if dest_is_remote:
-            dest_path, _ = _normalize_remote_path(destination)
+            dest_path = _normalize_remote_path(destination)
+            if dest_path:
+                dest_path = dest_path[1:]  # remove leading /
         else:
-            dest_path, _ = _normalize_local_path(destination)
+            dest_path = _normalize_local_path(destination)
 
         # Determine operation type
         if source_is_remote and dest_is_remote:
@@ -572,7 +527,7 @@ class CommandHandler:
             else:
                 # Copy into directory
                 filename = os.path.basename(source)
-                dest_file = f"{destination.rstrip('/')}/{filename}"
+                dest_file = os.path.join(destination, filename)
                 self.client.upload_file(source, dest_file)
         elif os.path.isdir(source):
             if not recursive:
@@ -646,7 +601,7 @@ class CommandHandler:
                 else:
                     # Copy into directory
                     filename = os.path.basename(source)
-                    dest_file = f"{destination.rstrip('/')}/{filename}"
+                    dest_file = os.path.join(destination, filename)
                     self.client.copy_file(source, dest_file)
             elif metadata.get("type") == "folder":
                 if not recursive:
@@ -716,7 +671,9 @@ class CommandHandler:
         )
         # get the base directory name to create under remote_base
         target_dir_name = os.path.basename(os.path.normpath(local_dir))
-        remote_base = os.path.join(remote_base, target_dir_name).replace("\\", "/")
+        remote_base = os.path.join(remote_base, target_dir_name).replace(
+            "\\", "/"
+        )
 
         if not self._is_remote_directory(remote_base):
             self.client.create_folder(remote_base)
@@ -724,17 +681,24 @@ class CommandHandler:
         for root, dirs, files in os.walk(local_dir):
             # Create corresponding remote directory
             for dir_name in dirs:
-                rel_dir = os.path.relpath(os.path.join(root, dir_name), local_dir)
-                remote_subdir = os.path.join(remote_base, rel_dir).replace("\\", "/")
+                rel_dir = os.path.relpath(
+                    os.path.join(root, dir_name), local_dir
+                )
+                remote_subdir = os.path.join(remote_base, rel_dir).replace(
+                    "\\", "/"
+                )
                 if not self._is_remote_directory(remote_subdir):
                     self.client.create_folder(remote_subdir)
 
             for file in files:
                 local_file_path = os.path.join(root, file)
                 relative_path = os.path.relpath(local_file_path, local_dir)
-                remote_path = os.path.join(remote_base, relative_path).replace("\\", "/")
+                remote_path = os.path.join(remote_base, relative_path).replace(
+                    "\\", "/"
+                )
                 self.client.upload_file(local_file_path, remote_path)
-        
+
+
 def setup_commands(
     app_config: AppConfig, verbose: bool = False
 ) -> CommandHandler:

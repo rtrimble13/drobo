@@ -117,9 +117,7 @@ class DropboxClient:
             logger.error(f"Failed to save refreshed tokens: {e}")
             raise
 
-    def list_folder(
-        self, path: str = "", mask: str = None, *args, **kwargs
-    ) -> List[dict]:
+    def list_folder(self, path: str = "", *args, **kwargs) -> List[dict]:
         """
         List contents of a folder.
         Supports pagination and returns a list of items with metadata.
@@ -133,16 +131,9 @@ class DropboxClient:
                 result = self._client.files_list_folder_continue(result.cursor)
                 entries.extend(result.entries)
 
-            if mask:
-                import re
-
-                pattern = re.compile(mask)
-
             items = []
 
             for entry in entries:
-                if mask and not pattern.search(entry.name):
-                    continue
 
                 item = {
                     "name": os.path.basename(entry.name),
@@ -211,7 +202,7 @@ class DropboxClient:
     def copy_file(self, from_path: str, to_path: str) -> None:
         """Copy a file or folder."""
         try:
-            self._client.files_copy_v2(from_path, to_path)
+            self._client.files_copy_v2(from_path, to_path, autorename=False)
             logger.info(f"Copied {from_path} to {to_path}")
 
         except AuthError as e:
@@ -219,6 +210,22 @@ class DropboxClient:
             # Retry after token refresh
             self.copy_file(from_path, to_path)
         except ApiError as e:
+            if isinstance(e.error, dropbox.files.RelocationError):
+                if e.error.is_from_lookup():
+                    if e.error.get_from_lookup().is_not_found():
+                        logger.error(f"Source '{from_path}' not found")
+                    raise FileNotFoundError(f"'{from_path}' not found")
+                if e.error.is_to():
+                    if e.error.get_to().is_conflict():
+                        self._client.files_delete_v2(to_path)
+                        self._client.files_copy_v2(
+                            from_path, to_path, autorename=False
+                        )
+                        logger.info(
+                            f"Overwrote existing '{to_path}' with '{from_path}'"
+                        )
+                        return
+
             logger.error(f"API error copying '{from_path}' to '{to_path}': {e}")
             raise
 

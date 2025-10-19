@@ -57,7 +57,7 @@ class TestCommandHandler:
         # Mock click.echo to capture output
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/")
+        command_handler.ls_with_options(path="//")
 
         # Should show files and folders but not hidden files
         expected_calls = [
@@ -84,7 +84,7 @@ class TestCommandHandler:
 
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/", long_format=True)
+        command_handler.ls_with_options(path="//", long_format=True)
 
         # Should show long format
         calls = mock_echo.call_args_list
@@ -120,7 +120,7 @@ class TestCommandHandler:
 
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/", reverse=True)
+        command_handler.ls_with_options(path="//", reverse=True)
 
         # Should show files in reverse alphabetical order
         expected_calls = [
@@ -156,7 +156,7 @@ class TestCommandHandler:
 
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/", sort_by_size=True)
+        command_handler.ls_with_options(path="//", sort_by_size=True)
 
         # Should show files sorted by size, largest first
         expected_calls = [
@@ -192,7 +192,7 @@ class TestCommandHandler:
 
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/", sort_by_time=True)
+        command_handler.ls_with_options(path="//", sort_by_time=True)
 
         # Should show files sorted by time, newest first
         expected_calls = [
@@ -222,7 +222,7 @@ class TestCommandHandler:
 
         mock_echo = mocker.patch("drobo.commands.click.echo")
 
-        command_handler.ls_with_options(path="/", long_format=True)
+        command_handler.ls_with_options(path="//", long_format=True)
 
         # Should show all files in long format
         calls = mock_echo.call_args_list
@@ -261,16 +261,17 @@ class TestCommandHandler:
         )
         mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
         mock_glob = mocker.patch("glob.glob")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
 
         # Simulate local to remote copy
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
-        mock_normalize_remote_path.return_value = ("/dest_file", None)
-        mock_normalize_local_path.return_value = (
-            "/home/user/source_file",
-            None,
-        )
+        mock_normalize_remote_path.return_value = "//dest_file"
+        mock_normalize_local_path.return_value = "/home/user/source_file"
+        mock_expand_source_wildcards.return_value = ["/home/user/source_file"]
 
         # Mock os.path methods
         mocker.patch("os.path.isfile", return_value=True)
@@ -298,15 +299,22 @@ class TestCommandHandler:
         )
         mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
         mock_glob = mocker.patch("glob.glob")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
 
         # Simulate local to remote copy
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
-        mock_normalize_remote_path.return_value = ("/target_dir", None)
+        mock_normalize_remote_path.return_value = "//target_dir"
         mock_normalize_local_path.side_effect = [
-            ("/home/user/file1", None),
-            ("/home/user/file2", None),
+            "/home/user/file1",
+            "/home/user/file2",
+        ]
+        mock_expand_source_wildcards.return_value = [
+            "/home/user/file1",
+            "/home/user/file2",
         ]
 
         # Mock os.path methods
@@ -342,8 +350,8 @@ class TestCommandHandler:
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
-        mock_normalize_remote_path.return_value = ("/remote/file", None)
-        mock_normalize_local_path.return_value = ("/home/user/local_file", None)
+        mock_normalize_remote_path.return_value = "/remote/file"
+        mock_normalize_local_path.return_value = "/home/user/local_file"
 
         # Mock client methods
         mock_get_metadata = mocker.patch.object(
@@ -360,7 +368,7 @@ class TestCommandHandler:
         )
 
         mock_download.assert_called_once_with(
-            "/remote/file", "/home/user/local_file"
+            "remote/file", "/home/user/local_file"
         )
 
     def test_cp_recursive_flag(self, command_handler, mocker):
@@ -374,26 +382,39 @@ class TestCommandHandler:
         )
         mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
         mock_glob = mocker.patch("glob.glob")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+        mock_validate_destination = mocker.patch(
+            "drobo.commands.CommandHandler."
+            "_validate_destination_for_multiple_files"
+        )
 
         # Local directory to remote
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
-        mock_normalize_local_path.return_value = ("/home/user/local_dir", None)
-        mock_normalize_remote_path.return_value = ("/remote_dir", None)
+        mock_normalize_local_path.return_value = "/home/user/local_dir"
+        mock_normalize_remote_path.return_value = "/remote_dir"
 
         mocker.patch("os.path.isdir", return_value=True)
         mocker.patch("os.path.isfile", return_value=False)
         mock_upload_recursive = mocker.patch.object(
             command_handler, "_upload_directory_recursive"
         )
+        mock_expand_source_wildcards.return_value = [
+            "/home/user/local_dir/file1.pdf",
+            "/home/user/local_dir/file2.pdf",
+        ]
+        mock_validate_destination.return_value = None
 
         command_handler.cp_with_options(
             sources=("/home/user/local_dir", "//remote_dir"), recursive=True
         )
 
-        mock_upload_recursive.assert_called_once_with(
-            "/home/user/local_dir", "/remote_dir"
+        assert mock_upload_recursive.call_count == 2
+        mock_upload_recursive.assert_called_with(
+            "/home/user/local_dir", "remote_dir"
         )
 
     def test_cp_local_to_local_error(self, command_handler, mocker):
@@ -404,14 +425,20 @@ class TestCommandHandler:
         )
         mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
         mock_glob = mocker.patch("glob.glob")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
 
         # Both paths are local
         mock_is_remote_path.return_value = False
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
         mock_normalize_local_path.side_effect = [
-            ("/home/user/file1", None),
-            ("/home/user/file2", None),
+            "/home/user/file1",
+            "/home/user/file2",
+        ]
+        mock_expand_source_wildcards.return_value = [
+            "/home/user/file1",
         ]
 
         with pytest.raises(Exception) as exc_info:
@@ -442,10 +469,10 @@ class TestCommandHandler:
             "/home/user/file1.pdf",
             "/home/user/file2.pdf",
         ]
-        mock_normalize_remote_path.return_value = ("/remote_dir", None)
+        mock_normalize_remote_path.return_value = "/remote_dir"
         mock_normalize_local_path.side_effect = [
-            ("/home/user/file1.pdf", None),
-            ("/home/user/file2.pdf", None),
+            "/home/user/file1.pdf",
+            "/home/user/file2.pdf",
         ]
 
         # Mock os.path and client methods
@@ -467,28 +494,23 @@ class TestCommandHandler:
         """Test cp with remote file wildcards."""
         mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
         mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
-        mock_normalize_remote_path = mocker.patch(
-            "drobo.commands._normalize_remote_path"
-        )
         mock_normalize_local_path = mocker.patch(
             "drobo.commands._normalize_local_path"
         )
         mock_list_folder = mocker.patch.object(
             command_handler.client, "list_folder"
         )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
 
         # Simulate remote wildcard to local copy
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.side_effect = lambda x: "*" in x
-        mock_normalize_remote_path.side_effect = [
-            ("/subdir", "^.*\\.pdf$"),
-            ("/subdir/file1.pdf", None),
-            ("/subdir/file2.pdf", None),
-        ]
         mock_normalize_local_path.side_effect = [
-            ("/local_dir", None),
-            ("/subdir/file1.pdf", None),
-            ("/subdir/file2.pdf", None),
+            "/local_dir",
+            "/subdir/file1.pdf",
+            "/subdir/file2.pdf",
         ]
 
         # Mock list_folder to return pdf files
@@ -503,6 +525,11 @@ class TestCommandHandler:
                 "type": "file",
                 "path": "/subdir/file2.pdf",
             },
+        ]
+
+        mock_expand_source_wildcards.return_value = [
+            "//subdir/file1.pdf",
+            "//subdir/file2.pdf",
         ]
 
         # Mock os.path and client methods
@@ -526,12 +553,19 @@ class TestCommandHandler:
         """Test cp rejects mixed remote and local sources."""
         mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
         mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_expanded_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
         mock_glob = mocker.patch("glob.glob")
 
         # Mix of remote and local
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
+        mock_expanded_wildcards.return_value = [
+            "/home/user/file1",
+            "//remote/file2",
+        ]
 
         with pytest.raises(Exception) as exc_info:
             command_handler.cp_with_options(
@@ -553,21 +587,29 @@ class TestCommandHandler:
         mock_normalize_local_path = mocker.patch(
             "drobo.commands._normalize_local_path"
         )
+        mock_expanded_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
 
         # Simulate multiple local files to remote non-directory
         mock_is_remote_path.side_effect = lambda x: x.startswith("//")
         mock_has_wildcards.return_value = False
         mock_glob.return_value = []
         mock_normalize_local_path.side_effect = [
-            ("/home/user/file1", None),
-            ("/home/user/file2", None),
+            "/home/user/file1",
+            "/home/user/file2",
         ]
-        mock_normalize_remote_path.return_value = ("/remote_file", None)
+        mock_normalize_remote_path.return_value = "/remote_file"
 
         # Mock destination as non-directory
         mocker.patch.object(
             command_handler, "_is_remote_directory", return_value=False
         )
+
+        mock_expanded_wildcards.return_value = [
+            "/home/user/file1",
+            "/home/user/file2",
+        ]
 
         with pytest.raises(Exception) as exc_info:
             command_handler.cp_with_options(
@@ -600,7 +642,7 @@ class TestCommandHandler:
 
         # Should call list_folder with normalized path
         command_handler.client.list_folder.assert_called_with(
-            "/subdir", mask=None, recursive=False
+            "/subdir", recursive=False
         )
         expected_calls = [
             mocker.call("file1.txt"),
@@ -622,24 +664,24 @@ class TestCommandHandler:
         # Test with // (explicit remote root)
         command_handler.ls_with_options(path="//")
         command_handler.client.list_folder.assert_called_with(
-            "", mask=None, recursive=False
+            "", recursive=False
         )
 
         # Test with / (default remote root)
-        command_handler.ls_with_options(path="/")
+        command_handler.ls_with_options(path="//")
         command_handler.client.list_folder.assert_called_with(
-            "", mask=None, recursive=False
+            "", recursive=False
         )
 
     def test_ls_rejects_local_paths(self, command_handler):
         """Test ls rejects local paths that don't start with //."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(Exception) as exc_info:
             command_handler.ls_with_options(path="/local/path")
 
-        assert "Local paths not supported in ls command" in str(exc_info.value)
-        assert "Use // for remote paths" in str(exc_info.value)
+        # check for exception raised for local paths
+        assert "ls requires a remote path" in str(exc_info.value)
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(Exception) as exc_info:
             command_handler.ls_with_options(path="/etc")
 
-        assert "Local paths not supported in ls command" in str(exc_info.value)
+        assert "ls requires a remote path" in str(exc_info.value)
