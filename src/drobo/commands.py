@@ -262,41 +262,6 @@ class CommandHandler:
             click.echo(f"mv: {e}", err=True)
             raise
 
-    def mv(self, args: Tuple[str, ...]) -> None:
-        """Move contents from one location to another. Mimic Linux mv."""
-        if len(args) != 2:
-            click.echo("mv: requires exactly two arguments", err=True)
-            raise click.ClickException("mv requires source and destination")
-
-        source, destination = args
-
-        try:
-            # Check if source is local or remote
-            if os.path.exists(source):
-                # Local to remote
-                remote_dest = (
-                    destination
-                    if destination.startswith("/")
-                    else "/" + destination
-                )
-                self.client.upload_file(source, remote_dest)
-                os.remove(source)  # Remove local file after upload
-            else:
-                # Remote to remote
-                remote_source = (
-                    source if source.startswith("/") else "/" + source
-                )
-                remote_dest = (
-                    destination
-                    if destination.startswith("/")
-                    else "/" + destination
-                )
-                self.client.move_file(remote_source, remote_dest)
-
-        except Exception as e:
-            click.echo(f"mv: {e}", err=True)
-            raise
-
     def rm_with_options(
         self, files: tuple, force: bool = False, recursive: bool = False
     ) -> None:
@@ -320,39 +285,6 @@ class CommandHandler:
                 self.client.delete_file(remote_path)
                 if self.verbose:
                     click.echo(f"removed '{file_path}'")
-
-            except Exception as e:
-                if not force:
-                    click.echo(f"rm: {e}", err=True)
-                    raise
-                elif self.verbose:
-                    click.echo(f"rm: {e}", err=True)
-
-    def rm(self, args: Tuple[str, ...]) -> None:
-        """Remove remote files and folders. Mimic Linux rm command."""
-        if not args:
-            click.echo("rm: missing operand", err=True)
-            raise click.ClickException("rm requires at least one file")
-
-        force = False
-
-        files_to_remove = []
-
-        for arg in args:
-            if arg.startswith("-"):
-                if "f" in arg:
-                    force = True
-            else:
-                files_to_remove.append(arg)
-
-        for file_path in files_to_remove:
-            try:
-                remote_path = (
-                    file_path if file_path.startswith("/") else "/" + file_path
-                )
-                self.client.delete_file(remote_path)
-                if self.verbose:
-                    click.echo(f"removed '{remote_path}'")
 
             except Exception as e:
                 if not force:
