@@ -191,22 +191,58 @@ def cp(
 
 
 @cli.command()
-@click.argument("source")
-@click.argument("destination")
+@click.argument("sources", nargs=-1, required=True)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    help="do not raise an error if the destination file already exists",
+)
+@click.option(
+    "-u",
+    "--update",
+    is_flag=True,
+    help="move only when SOURCE is newer than destination or "
+    "destination is missing",
+)
+@click.option(
+    "-t", "--target-directory", help="move all SOURCE arguments into DIRECTORY"
+)
 @click.pass_context
-def mv(ctx, source: str, destination: str) -> None:
+def mv(
+    ctx,
+    sources: tuple,
+    force: bool,
+    update: bool,
+    target_directory: str,
+) -> None:
     """Move contents from one location to another. Mimic Linux mv command.
 
+    Usage:
+    drobo <app name> mv [options] SOURCE ... DEST
+    drobo <app name> mv [options] -t DIRECTORY SOURCE ...
+
     Remote paths begin with //, local paths follow Linux conventions.
+    Wildcards (*,?) are supported in SOURCE paths.
+    All SOURCE files must be either remote or local (cannot mix).
 
     Examples:
     drobo myapp mv ~/file1 //file2      Move local file to remote
     drobo myapp mv //file1 ~/file2      Move remote file to local
     drobo myapp mv //file1 //file2      Move remote file to remote
+    drobo myapp mv //subdir/*.pdf .     Move remote PDFs to current dir
+    drobo myapp mv -t //dest //src1 //src2   Move multiple files to dest
+    drobo myapp mv -f //file1 //file2   Force move even if file2 exists
+    drobo myapp mv -u //file1 //file2   Move only if file1 is newer
     """
     try:
         command_handler = get_command_handler(ctx)
-        command_handler.mv_with_options(source, destination)
+        command_handler.mv_with_options(
+            sources=sources,
+            force=force,
+            update=update,
+            target_directory=target_directory,
+        )
     except Exception as e:
         logging.error(f"mv command failed: {e}")
         if ctx.obj.get("verbose"):
