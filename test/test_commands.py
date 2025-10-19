@@ -685,3 +685,368 @@ class TestCommandHandler:
             command_handler.ls_with_options(path="/etc")
 
         assert "ls requires a remote path" in str(exc_info.value)
+
+    def test_mv_with_t_flag(self, command_handler, mocker):
+        """Test mv with -t flag (target directory)."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_normalize_local_path = mocker.patch(
+            "drobo.commands._normalize_local_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate local to remote move
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.return_value = "//target_dir"
+        mock_normalize_local_path.side_effect = [
+            "/home/user/file1",
+            "/home/user/file2",
+        ]
+        mock_expand_source_wildcards.return_value = [
+            "/home/user/file1",
+            "/home/user/file2",
+        ]
+
+        # Mock methods
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.remove")
+        mock_upload = mocker.patch.object(command_handler.client, "upload_file")
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = Exception("not found")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=True
+        )
+
+        command_handler.mv_with_options(
+            sources=("/home/user/file1", "/home/user/file2"),
+            target_directory="//target_dir",
+        )
+
+        # Should upload both files to target directory
+        assert mock_upload.call_count == 2
+        mock_upload.assert_any_call("/home/user/file1", "/target_dir/file1")
+        mock_upload.assert_any_call("/home/user/file2", "/target_dir/file2")
+
+    def test_mv_with_force_flag(self, command_handler, mocker):
+        """Test mv with -f flag (force overwrite)."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote to remote move
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.side_effect = [
+            "//source_file",
+            "//dest_file",
+        ]
+        mock_expand_source_wildcards.return_value = ["//source_file"]
+
+        # Mock destination exists
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {
+            "type": "file",
+            "modified": "2023-01-01",
+        }
+        mock_move = mocker.patch.object(command_handler.client, "move_file")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=False
+        )
+
+        command_handler.mv_with_options(
+            sources=("//source_file", "//dest_file"), force=True
+        )
+
+        # Should move even though destination exists
+        mock_move.assert_called_once_with("/source_file", "/dest_file")
+
+    def test_mv_without_force_flag_dest_exists(self, command_handler, mocker):
+        """Test mv without -f flag raises error when destination exists."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote to remote move
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.side_effect = [
+            "//source_file",
+            "//dest_file",
+        ]
+        mock_expand_source_wildcards.return_value = ["//source_file"]
+
+        # Mock destination exists
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {
+            "type": "file",
+            "modified": "2023-01-01",
+        }
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=False
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.mv_with_options(
+                sources=("//source_file", "//dest_file"), force=False
+            )
+
+        assert "destination file exists" in str(exc_info.value)
+
+    def test_mv_with_update_flag_newer_source(self, command_handler, mocker):
+        """Test mv with -u flag moves when source is newer."""
+        from datetime import datetime
+
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote to remote move
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.side_effect = [
+            "//source_file",
+            "//dest_file",
+        ]
+        mock_expand_source_wildcards.return_value = ["//source_file"]
+
+        # Mock metadata with newer source
+        source_time = datetime(2023, 1, 2)
+        dest_time = datetime(2023, 1, 1)
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = [
+            {"type": "file", "modified": dest_time},
+            {"type": "file", "modified": source_time},
+        ]
+
+        mock_move = mocker.patch.object(command_handler.client, "move_file")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=False
+        )
+
+        command_handler.mv_with_options(
+            sources=("//source_file", "//dest_file"), update=True
+        )
+
+        # Should move because source is newer
+        mock_move.assert_called_once_with("/source_file", "/dest_file")
+
+    def test_mv_with_update_flag_older_source(self, command_handler, mocker):
+        """Test mv with -u flag skips when source is older."""
+        from datetime import datetime
+
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote to remote move
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.side_effect = [
+            "//source_file",
+            "//dest_file",
+        ]
+        mock_expand_source_wildcards.return_value = ["//source_file"]
+
+        # Mock metadata with older source
+        source_time = datetime(2023, 1, 1)
+        dest_time = datetime(2023, 1, 2)
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = [
+            {"type": "file", "modified": dest_time},
+            {"type": "file", "modified": source_time},
+        ]
+
+        mock_move = mocker.patch.object(command_handler.client, "move_file")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=False
+        )
+
+        command_handler.mv_with_options(
+            sources=("//source_file", "//dest_file"), update=True
+        )
+
+        # Should not move because source is older
+        mock_move.assert_not_called()
+
+    def test_mv_with_wildcards(self, command_handler, mocker):
+        """Test mv with wildcard expansion."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_list_folder = mocker.patch.object(
+            command_handler.client, "list_folder"
+        )
+
+        # Simulate remote wildcard to remote directory
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_has_wildcards.side_effect = lambda x: "*" in x
+
+        # Return normalized paths for source and destination
+        def normalize_side_effect(path):
+            if "*.pdf" in path:
+                return "//subdir/*.pdf"
+            elif "target_dir" in path:
+                return "//target_dir"
+            elif "file1.pdf" in path:
+                return "//subdir/file1.pdf"
+            elif "file2.pdf" in path:
+                return "//subdir/file2.pdf"
+            else:
+                return path
+
+        mock_normalize_remote_path.side_effect = normalize_side_effect
+
+        # Mock list_folder to return pdf files
+        mock_list_folder.return_value = [
+            {
+                "name": "file1.pdf",
+                "type": "file",
+                "path": "/subdir/file1.pdf",
+            },
+            {
+                "name": "file2.pdf",
+                "type": "file",
+                "path": "/subdir/file2.pdf",
+            },
+        ]
+
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = Exception("not found")
+        mock_move = mocker.patch.object(command_handler.client, "move_file")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=True
+        )
+
+        command_handler.mv_with_options(
+            sources=("//subdir/*.pdf", "//target_dir")
+        )
+
+        # Should move both matched files
+        assert mock_move.call_count == 2
+
+    def test_mv_multiple_sources_to_directory(self, command_handler, mocker):
+        """Test mv with multiple sources to a directory."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_has_wildcards = mocker.patch("drobo.commands._has_wildcards")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote to remote move
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_has_wildcards.return_value = False
+
+        # Return normalized paths for all calls
+        def normalize_side_effect(path):
+            if "file1" in path:
+                return "//file1"
+            elif "file2" in path:
+                return "//file2"
+            elif "target_dir" in path:
+                return "//target_dir"
+            else:
+                return path
+
+        mock_normalize_remote_path.side_effect = normalize_side_effect
+        mock_expand_source_wildcards.return_value = ["//file1", "//file2"]
+
+        # Mock methods
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = Exception("not found")
+        mock_move = mocker.patch.object(command_handler.client, "move_file")
+        mocker.patch.object(
+            command_handler, "_is_remote_directory", return_value=True
+        )
+
+        command_handler.mv_with_options(
+            sources=("//file1", "//file2", "//target_dir")
+        )
+
+        # Should move both files to target directory
+        assert mock_move.call_count == 2
+        mock_move.assert_any_call("/file1", "/target_dir/file1")
+        mock_move.assert_any_call("/file2", "/target_dir/file2")
+
+    def test_mv_local_to_local_error(self, command_handler, mocker):
+        """Test mv rejects local to local operations."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_local_path = mocker.patch(
+            "drobo.commands._normalize_local_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Both paths are local
+        mock_is_remote_path.return_value = False
+        mock_normalize_local_path.side_effect = [
+            "/home/user/file1",
+            "/home/user/file2",
+        ]
+        mock_expand_source_wildcards.return_value = ["/home/user/file1"]
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.mv_with_options(
+                sources=("/home/user/file1", "/home/user/file2")
+            )
+
+        assert "not used for moving local files to local destinations" in str(
+            exc_info.value
+        )
+
+    def test_mv_mixed_source_types_error(self, command_handler, mocker):
+        """Test mv rejects mixed remote and local sources."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Mix of remote and local
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_expand_source_wildcards.return_value = [
+            "/home/user/file1",
+            "//remote/file2",
+        ]
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.mv_with_options(
+                sources=("/home/user/file1", "//remote/file2", "//dest")
+            )
+
+        assert "cannot mix remote and local source files" in str(exc_info.value)

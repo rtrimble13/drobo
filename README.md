@@ -55,6 +55,21 @@ drobo myapp cp /remote_file.txt local_file.txt
 # Move file within Dropbox
 drobo myapp mv /old_location.txt /new_location.txt
 
+# Move multiple files to a directory
+drobo myapp mv //file1.txt //file2.txt //documents/
+
+# Move files using wildcards
+drobo myapp mv //subdir/*.pdf //target_dir/
+
+# Move with target directory option
+drobo myapp mv -t //documents/ //file1.txt //file2.txt
+
+# Force move (overwrite if destination exists)
+drobo myapp mv -f //source.txt //existing_dest.txt
+
+# Move only if source is newer (update)
+drobo myapp mv -u //source.txt //dest.txt
+
 # Remove file from Dropbox
 drobo myapp rm /unwanted_file.txt
 

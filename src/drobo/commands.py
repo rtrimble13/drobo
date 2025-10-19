@@ -7,7 +7,7 @@ import glob
 import logging
 import os
 import re
-from typing import List, Tuple
+from typing import List
 
 import click
 
@@ -218,49 +218,170 @@ class CommandHandler:
                 click.echo(f"cp: {e}", err=True)
                 raise
 
-    def mv_with_options(self, source: str, destination: str) -> None:
-        """Move contents with structured options (like ls_with_options)."""
-        if not source or not destination:
-            click.echo("mv: missing operand", err=True)
-            raise click.ClickException("mv requires source and destination")
+    def mv_with_options(
+        self,
+        sources: tuple,
+        force: bool = False,
+        update: bool = False,
+        target_directory: str = None,
+    ) -> None:
+        """Move contents with structured options (like cp_with_options)."""
+        if not sources:
+            click.echo("mv: missing file operand", err=True)
+            raise click.ClickException("mv requires source files")
 
-        try:
-            # Normalize paths based on conventions
-            source_is_remote = _is_remote_path(source)
-            dest_is_remote = _is_remote_path(destination)
+        # Convert sources tuple to list for easier manipulation
+        source_list = list(sources)
+        destination = None
 
-            if source_is_remote:
-                source_path, _ = _normalize_remote_path(source)
-            else:
-                source_path, _ = _normalize_local_path(source)
+        # Handle different mv command forms
+        if target_directory is not None:
+            # Form: mv -t DIRECTORY SOURCE ...
+            destination = target_directory
+            if not source_list:
+                click.echo("mv: missing file operand", err=True)
+                raise click.ClickException("mv: -t requires source files")
+        else:
+            # Form: mv SOURCE ... DIRECTORY (traditional form)
+            if len(source_list) < 2:
+                click.echo("mv: missing file operand", err=True)
+                raise click.ClickException("mv requires source and destination")
+            destination = source_list.pop()
 
-            if dest_is_remote:
-                dest_path, _ = _normalize_remote_path(destination)
-            else:
-                dest_path, _ = _normalize_local_path(destination)
+        # Expand wildcards in sources
+        expanded_sources = self._expand_source_wildcards(source_list)
 
-            # Handle different move operations
-            if source_is_remote and dest_is_remote:
-                # Remote to remote
-                self.client.move_file(source_path, dest_path)
-            elif not source_is_remote and dest_is_remote:
-                # Local to remote (upload then delete local)
-                self.client.upload_file(source_path, dest_path)
-                os.remove(source_path)
-            elif source_is_remote and not dest_is_remote:
-                # Remote to local (download then delete remote)
-                self.client.download_file(source_path, dest_path)
-                self.client.delete_file(source_path)
-            else:
-                # Both local - not supported
+        if not expanded_sources:
+            click.echo("mv: no files matched", err=True)
+            raise click.ClickException("mv: no files matched")
+
+        # Validate all sources are either remote or local
+        self._validate_source_consistency(expanded_sources)
+
+        # Check if we need to validate destination directory existence
+        # (when moving multiple files, destination must be a directory)
+        if len(expanded_sources) > 1:
+            self._validate_destination_for_multiple_files(
+                expanded_sources, destination, False
+            )
+
+        # Perform the move operations
+        for source in expanded_sources:
+            try:
+                self._move_file(source, destination, force, update)
+            except Exception as e:
+                click.echo(f"mv: {e}", err=True)
+                raise
+
+    def _move_file(
+        self, source: str, destination: str, force: bool, update: bool
+    ) -> None:
+        """Move a single file with force and update options."""
+        # Normalize paths based on conventions
+        source_is_remote = _is_remote_path(source)
+        dest_is_remote = _is_remote_path(destination)
+
+        if source_is_remote:
+            source_path = _normalize_remote_path(source)
+            if source_path:
+                source_path = source_path[1:]  # remove leading /
+        else:
+            source_path = _normalize_local_path(source)
+
+        if dest_is_remote:
+            dest_path = _normalize_remote_path(destination)
+            if dest_path:
+                dest_path = dest_path[1:]  # remove leading /
+        else:
+            dest_path = _normalize_local_path(destination)
+
+        # If destination is a directory, move file into it
+        if source_is_remote and dest_is_remote:
+            if self._is_remote_directory(dest_path):
+                filename = os.path.basename(source_path)
+                dest_path = os.path.join(dest_path, filename)
+        elif dest_is_remote:
+            if self._is_remote_directory(dest_path):
+                filename = os.path.basename(source_path)
+                dest_path = os.path.join(dest_path, filename)
+        elif not dest_is_remote:
+            if os.path.isdir(dest_path):
+                filename = os.path.basename(source_path)
+                dest_path = os.path.join(dest_path, filename)
+
+        # Check if destination exists and handle force/update flags
+        dest_exists = False
+        dest_mtime = None
+
+        if source_is_remote and dest_is_remote:
+            try:
+                metadata = self.client.get_metadata(dest_path)
+                dest_exists = True
+                dest_mtime = metadata.get("modified")
+            except Exception:
+                dest_exists = False
+        elif not dest_is_remote:
+            if os.path.exists(dest_path):
+                dest_exists = True
+                dest_mtime = os.path.getmtime(dest_path)
+        elif dest_is_remote:
+            try:
+                metadata = self.client.get_metadata(dest_path)
+                dest_exists = True
+                dest_mtime = metadata.get("modified")
+            except Exception:
+                dest_exists = False
+
+        # Handle destination exists scenario
+        if dest_exists:
+            if not force and not update:
                 raise ValueError(
-                    "drobo mv is not used for moving local files to local "
-                    "destinations"
+                    f"cannot move '{source}' to '{destination}': "
+                    f"destination file exists"
                 )
+            elif update:
+                # Get source modification time
+                source_mtime = None
+                if source_is_remote:
+                    try:
+                        metadata = self.client.get_metadata(source_path)
+                        source_mtime = metadata.get("modified")
+                    except Exception:
+                        pass
+                else:
+                    if os.path.exists(source_path):
+                        source_mtime = os.path.getmtime(source_path)
 
-        except Exception as e:
-            click.echo(f"mv: {e}", err=True)
-            raise
+                # Compare modification times
+                if source_mtime and dest_mtime:
+                    # Handle datetime objects
+                    if hasattr(source_mtime, "timestamp"):
+                        source_mtime = source_mtime.timestamp()
+                    if hasattr(dest_mtime, "timestamp"):
+                        dest_mtime = dest_mtime.timestamp()
+
+                    # Skip if source is not newer
+                    if source_mtime <= dest_mtime:
+                        return
+
+        # Perform the actual move operation
+        if source_is_remote and dest_is_remote:
+            # Remote to remote
+            self.client.move_file(source_path, dest_path)
+        elif not source_is_remote and dest_is_remote:
+            # Local to remote (upload then delete local)
+            self.client.upload_file(source_path, dest_path)
+            os.remove(source_path)
+        elif source_is_remote and not dest_is_remote:
+            # Remote to local (download then delete remote)
+            self.client.download_file(source_path, dest_path)
+            self.client.delete_file(source_path)
+        else:
+            # Both local - not supported
+            raise ValueError(
+                "drobo mv is not used for moving local files to local "
+                "destinations"
+            )
 
     def rm_with_options(
         self, files: tuple, force: bool = False, recursive: bool = False
