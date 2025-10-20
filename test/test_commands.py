@@ -1050,3 +1050,244 @@ class TestCommandHandler:
             )
 
         assert "cannot mix remote and local source files" in str(exc_info.value)
+
+    def test_rm_basic(self, command_handler, mocker):
+        """Test basic rm functionality."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote file removal
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.return_value = "//file1"
+        mock_expand_source_wildcards.return_value = ["//file1"]
+
+        # Mock client methods
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {"type": "file"}
+        mock_delete = mocker.patch.object(command_handler.client, "delete_file")
+
+        command_handler.rm_with_options(sources=("//file1",))
+
+        # Should delete the file
+        mock_delete.assert_called_once_with("/file1")
+
+    def test_rm_multiple_files(self, command_handler, mocker):
+        """Test rm with multiple files."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote file removal
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.side_effect = [
+            "//file1",
+            "//file2",
+        ]
+        mock_expand_source_wildcards.return_value = ["//file1", "//file2"]
+
+        # Mock client methods
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {"type": "file"}
+        mock_delete = mocker.patch.object(command_handler.client, "delete_file")
+
+        command_handler.rm_with_options(sources=("//file1", "//file2"))
+
+        # Should delete both files
+        assert mock_delete.call_count == 2
+        mock_delete.assert_any_call("/file1")
+        mock_delete.assert_any_call("/file2")
+
+    def test_rm_with_wildcard(self, command_handler, mocker):
+        """Test rm with wildcard expansion."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote wildcard expansion
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.side_effect = [
+            "//subdir/file1.pdf",
+            "//subdir/file2.pdf",
+        ]
+
+        # Mock expand_source_wildcards to return expanded files
+        mock_expand_source_wildcards.return_value = [
+            "//subdir/file1.pdf",
+            "//subdir/file2.pdf",
+        ]
+
+        # Mock client methods
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {"type": "file"}
+        mock_delete = mocker.patch.object(command_handler.client, "delete_file")
+
+        command_handler.rm_with_options(sources=("//subdir/*.pdf",))
+
+        # Should delete both matched files
+        assert mock_delete.call_count == 2
+
+    def test_rm_directory_without_recursive_flag(self, command_handler, mocker):
+        """Test rm rejects directory without -r flag."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote directory
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.return_value = "//directory"
+        mock_expand_source_wildcards.return_value = ["//directory"]
+
+        # Mock client methods
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {"type": "folder"}
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.rm_with_options(sources=("//directory",))
+
+        assert "Is a directory" in str(exc_info.value)
+
+    def test_rm_directory_with_recursive_flag(self, command_handler, mocker):
+        """Test rm with -r flag for recursive directory removal."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote directory
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.return_value = "//directory"
+        mock_expand_source_wildcards.return_value = ["//directory"]
+
+        # Mock client methods
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.return_value = {"type": "folder"}
+        mock_delete = mocker.patch.object(command_handler.client, "delete_file")
+
+        command_handler.rm_with_options(
+            sources=("//directory",), recursive=True
+        )
+
+        # Should delete the directory
+        mock_delete.assert_called_once_with("/directory")
+
+    def test_rm_with_force_flag(self, command_handler, mocker):
+        """Test rm with -f flag suppresses errors."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote file that doesn't exist
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.return_value = "//nonexistent"
+        mock_expand_source_wildcards.return_value = ["//nonexistent"]
+
+        # Mock client methods to raise exception
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = Exception("not_found")
+
+        # Should not raise exception with force flag
+        command_handler.rm_with_options(sources=("//nonexistent",), force=True)
+
+    def test_rm_without_force_flag_raises_error(self, command_handler, mocker):
+        """Test rm without -f flag raises error on missing file."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_normalize_remote_path = mocker.patch(
+            "drobo.commands._normalize_remote_path"
+        )
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate remote file that doesn't exist
+        mock_is_remote_path.side_effect = lambda x: x.startswith("//")
+        mock_normalize_remote_path.return_value = "//nonexistent"
+        mock_expand_source_wildcards.return_value = ["//nonexistent"]
+
+        # Mock client methods to raise exception
+        mock_get_metadata = mocker.patch.object(
+            command_handler.client, "get_metadata"
+        )
+        mock_get_metadata.side_effect = Exception("not_found")
+
+        with pytest.raises(Exception):
+            command_handler.rm_with_options(sources=("//nonexistent",))
+
+    def test_rm_rejects_local_paths(self, command_handler, mocker):
+        """Test rm rejects local paths."""
+        mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate local path
+        mock_is_remote_path.return_value = False
+        mock_expand_source_wildcards.return_value = ["/local/file"]
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.rm_with_options(sources=("/local/file",))
+
+        assert "rm requires remote paths" in str(exc_info.value)
+
+    def test_rm_no_files_matched(self, command_handler, mocker):
+        """Test rm with no matched files."""
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate no matched files
+        mock_expand_source_wildcards.return_value = []
+
+        with pytest.raises(Exception) as exc_info:
+            command_handler.rm_with_options(sources=("//nonexistent*.pdf",))
+
+        assert "no files matched" in str(exc_info.value)
+
+    def test_rm_no_files_matched_with_force(self, command_handler, mocker):
+        """Test rm with no matched files and force flag."""
+        mock_expand_source_wildcards = mocker.patch(
+            "drobo.commands.CommandHandler._expand_source_wildcards"
+        )
+
+        # Simulate no matched files
+        mock_expand_source_wildcards.return_value = []
+
+        # Should not raise exception with force flag
+        command_handler.rm_with_options(
+            sources=("//nonexistent*.pdf",), force=True
+        )

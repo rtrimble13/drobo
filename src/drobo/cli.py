@@ -252,7 +252,7 @@ def mv(
 
 
 @cli.command()
-@click.argument("files", nargs=-1, required=True)
+@click.argument("sources", nargs=-1, required=True)
 @click.option(
     "-f",
     "--force",
@@ -266,19 +266,26 @@ def mv(
     help="remove directories and their contents recursively",
 )
 @click.pass_context
-def rm(ctx, files: tuple, force: bool, recursive: bool) -> None:
+def rm(ctx, sources: tuple, force: bool, recursive: bool) -> None:
     """Remove remote files and folders. Mimic Linux rm command.
 
-    Only remote files (starting with //) can be removed.
+    Usage:
+    drobo <app name> rm [options] FILE1 ...
+
+    Remote paths begin with //. Only remote files can be removed.
+    Wildcards (*,?) are supported in FILE paths.
 
     Examples:
     drobo myapp rm //file1              Remove remote file
-    drobo myapp rm -f //file1 //file2   Force remove multiple files
+    drobo myapp rm //file1 //file2      Remove multiple remote files
+    drobo myapp rm //subdir/*.pdf       Remove remote PDFs using wildcard
+    drobo myapp rm -f //file1 //file2   Force remove (ignore errors)
+    drobo myapp rm -r //directory       Remove directory recursively
     drobo myapp rm -rf //directory      Force remove directory recursively
     """
     try:
         command_handler = get_command_handler(ctx)
-        command_handler.rm_with_options(files, force, recursive)
+        command_handler.rm_with_options(sources, force, recursive)
     except Exception as e:
         logging.error(f"rm command failed: {e}")
         if ctx.obj.get("verbose"):
