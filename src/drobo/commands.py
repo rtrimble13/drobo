@@ -384,35 +384,80 @@ class CommandHandler:
             )
 
     def rm_with_options(
-        self, files: tuple, force: bool = False, recursive: bool = False
+        self, sources: tuple, force: bool = False, recursive: bool = False
     ) -> None:
-        """Remove files with structured options (like ls_with_options)."""
-        if not files:
+        """Remove remote files with structured options."""
+        if not sources:
             click.echo("rm: missing operand", err=True)
             raise click.ClickException("rm requires at least one file")
 
-        for file_path in files:
+        # Convert sources tuple to list for easier manipulation
+        source_list = list(sources)
+
+        # Expand wildcards in sources
+        expanded_sources = self._expand_source_wildcards(source_list)
+
+        if not expanded_sources:
+            if not force:
+                click.echo("rm: no files matched", err=True)
+                raise click.ClickException("rm: no files matched")
+            return
+
+        # Validate all sources are remote paths only
+        for source in expanded_sources:
+            if not _is_remote_path(source):
+                click.echo(
+                    f"rm: cannot remove '{source}': Only remote files "
+                    f"(starting with //) can be removed",
+                    err=True,
+                )
+                raise click.ClickException("rm requires remote paths")
+
+        # Perform the remove operations
+        for source in expanded_sources:
             try:
-                # Normalize path based on conventions
-                if _is_remote_path(file_path):
-                    remote_path, _ = _normalize_remote_path(file_path)
-                else:
-                    # rm only works on remote files
-                    raise ValueError(
-                        f"rm: cannot remove '{file_path}': Only remote files "
-                        f"(starting with //) can be removed"
-                    )
-
-                self.client.delete_file(remote_path)
-                if self.verbose:
-                    click.echo(f"removed '{file_path}'")
-
+                self._remove_file_or_folder(source, recursive)
             except Exception as e:
                 if not force:
                     click.echo(f"rm: {e}", err=True)
                     raise
                 elif self.verbose:
                     click.echo(f"rm: {e}", err=True)
+
+    def _remove_file_or_folder(
+        self, source: str, recursive: bool = False
+    ) -> None:
+        """Remove a remote file or folder."""
+        # Normalize remote path
+        source_path = _normalize_remote_path(source)
+        if source_path:
+            source_path = source_path[1:]  # remove leading /
+
+        try:
+            # Check if source is a file or directory
+            metadata = self.client.get_metadata(source_path)
+            if metadata.get("type") == "folder":
+                if not recursive:
+                    raise ValueError(
+                        f"cannot remove '{source}': Is a directory "
+                        f"(use -r for recursive removal)"
+                    )
+                # Delete directory recursively
+                self.client.delete_file(source_path)
+                if self.verbose:
+                    click.echo(f"removed directory '{source}'")
+            else:
+                # Delete file
+                self.client.delete_file(source_path)
+                if self.verbose:
+                    click.echo(f"removed '{source}'")
+        except Exception as e:
+            # Re-raise with more informative message if file doesn't exist
+            if "not_found" in str(e).lower():
+                raise ValueError(
+                    f"cannot remove '{source}': No such file or directory"
+                )
+            raise
 
     def _print_simple_format(self, items: List[dict]) -> None:
         """Print items in simple format."""
