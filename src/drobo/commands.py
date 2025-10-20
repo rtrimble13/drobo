@@ -27,8 +27,8 @@ def _normalize_remote_path(path: str) -> str:
     Convert remote path from // prefix to Dropbox API format.
     Dropbox API paths start with / and do not have // prefix.
     """
-    if not path or path in ["//", "/"]:
-        return ""  # Empty path means root in Dropbox API
+    if not path or path == "//":
+        return "//"  # root path
 
     # format with // prefix
     normalized_path = os.path.abspath("//" + re.sub(r"^/+", "", path))
@@ -88,7 +88,10 @@ class CommandHandler:
         path = _normalize_remote_path(path)
 
         if path:
-            path = path[1:]  # remove leading /
+            if path == "//":
+                path = "" # keep empty for root with ls
+            else:
+                path = path[1:]  # remove leading /
 
         # check for wildcards in the last path component
         if _has_wildcards(path):
@@ -714,6 +717,8 @@ class CommandHandler:
 
     def _is_remote_directory(self, path: str) -> bool:
         """Check if a remote path is a directory."""
+        if path in ["/", "//"]:
+            return True # root is a directory
         try:
             metadata = self.client.get_metadata(path)
             return metadata.get("type") == "folder"

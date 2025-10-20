@@ -248,7 +248,7 @@ class DropboxClient:
             # Retry after token refresh
             return self.get_metadata(path)
         except ApiError as e:
-            logger.error(f"API error getting metadata for '{path}': {e}")
+            logger.warning(f"API error getting metadata for '{path}': {e}")
             raise
 
     def move_file(self, from_path: str, to_path: str) -> None:

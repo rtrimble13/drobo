@@ -1,27 +1,28 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "drobo"
-version = "0.1.0"
+version = "1.0.0"
 description = "A Dropbox CLI"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "rtrimble13", email = "rtrimble13@example.com"}
+    {name = "rtrimble13"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "click>=8.0.0",
     "dropbox>=11.0.0",
@@ -44,6 +45,8 @@ drobo = "drobo.cli:main"
 [project.urls]
 Homepage = "https://github.com/rtrimble13/drobo"
 Repository = "https://github.com/rtrimble13/drobo"
+Issues = "https://github.com/rtrimble13/drobo/issues"
+Changelog = "https://github.com/rtrimble13/drobo/releases"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -51,9 +54,24 @@ where = ["src"]
 [tool.black]
 line-length = 80
 target-version = ["py38"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    # directories
+    \.eggs
+    | \.git
+    | \.hg 
+    | \.mypy_cache 
+    | \.tox 
+    | \.venv 
+    | build 
+    | dist 
+)/
+'''
 
 [tool.isort]
 profile = "black"
+line_length = 80
 multi_line_output = 3
 
 [tool.pytest.ini_options]
@@ -61,7 +79,11 @@ testpaths = ["test"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
 
 [tool.coverage.run]
 source = ["src"]

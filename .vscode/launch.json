@@ -28,7 +28,7 @@
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/src/drobo/cli.py",
             "console": "integratedTerminal",
-            "args": ["sput", "cp", "//var/tmp/2025-07*", "//var/tmp2/"]
+            "args": ["sput", "cp", "var/test.txt", "//"]
         }
     ]
 }

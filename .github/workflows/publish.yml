@@ -1,0 +1,18 @@
+name: Publish Python
+
+on:
+  push:
+    tags:
+      - 'v*'                      # Only run on version tags, e.g., v1.2.3
+
+jobs:
+    pypi-publish:
+        name: Publish to PyPI
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+        steps:
+            
+            - name: Publish package distributions to PyPI
+              uses: pypa/gh-action-pypi-publish@release/v1
+

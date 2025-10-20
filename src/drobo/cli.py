@@ -15,7 +15,7 @@ from drobo.config import ConfigManager
 
 def setup_logging(verbose: bool = False) -> None:
     """Setup logging configuration."""
-    level = logging.DEBUG if verbose else logging.WARN
+    level = logging.DEBUG if verbose else logging.ERROR
     format_str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     logging.basicConfig(

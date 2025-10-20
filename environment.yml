@@ -1,0 +1,16 @@
+name: drobo
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - pip
+  - setuptools
+  - wheel
+  - click>=8.0.0
+  - pytest>=7.0.0
+  - black>=22.0.0
+  - flake8>=4.0.0
+  - isort>=5.10.0
+  - pip:
+    - -e .
