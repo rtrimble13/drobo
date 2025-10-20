@@ -89,7 +89,7 @@ class CommandHandler:
 
         if path:
             if path == "//":
-                path = "" # keep empty for root with ls
+                path = ""  # keep empty for root with ls
             else:
                 path = path[1:]  # remove leading /
 
@@ -718,7 +718,7 @@ class CommandHandler:
     def _is_remote_directory(self, path: str) -> bool:
         """Check if a remote path is a directory."""
         if path in ["/", "//"]:
-            return True # root is a directory
+            return True  # root is a directory
         try:
             metadata = self.client.get_metadata(path)
             return metadata.get("type") == "folder"
