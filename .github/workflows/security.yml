@@ -21,6 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependency Review
+        # Requires the repository's Dependency Graph feature, which is
+        # currently disabled (Settings > Code security and analysis), so
+        # the action errors out with "not supported on this repository".
+        # Reporting rather than blocking until it is switched on; the
+        # `audit` job below covers vulnerable dependencies in the meantime
+        # and does block. Drop continue-on-error once the graph is enabled.
+        continue-on-error: true
         uses: actions/dependency-review-action@v4
 
   audit:
