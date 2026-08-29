@@ -28,11 +28,14 @@ class TestCommandHandler:
 
     @pytest.fixture
     def command_handler(self, app_config, mocker):
-        """Create command handler with mocked client."""
-        mocker.patch("drobo.commands.ConfigManager")
+        """Create command handler with mocked client.
+
+        The config manager is injected directly, so there is no longer any
+        need to patch it into the module under test.
+        """
         mocker.patch("drobo.commands.DropboxClient")
 
-        handler = CommandHandler(app_config, verbose=False)
+        handler = CommandHandler(app_config, Mock(), verbose=False)
         handler.client = Mock()
         return handler
 

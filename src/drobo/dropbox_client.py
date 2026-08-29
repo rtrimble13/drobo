@@ -4,8 +4,9 @@ Dropbox API client for drobo.
 
 import logging
 import os
+import sys
 import tempfile
-from typing import List
+from typing import List, Optional, Tuple
 
 import dropbox
 from dropbox.exceptions import ApiError, AuthError
@@ -15,6 +16,59 @@ from dropbox.oauth import DropboxOAuth2FlowNoRedirect
 from drobo.config import AppConfig, ConfigManager
 
 logger = logging.getLogger(__name__)
+
+# Scopes drobo needs to implement ls/cp/mv/rm.
+OAUTH_SCOPES = [
+    "files.metadata.read",
+    "files.content.read",
+    "files.content.write",
+]
+
+
+class DroboAuthError(Exception):
+    """Raised when drobo cannot obtain or refresh usable credentials."""
+
+
+def authorize_interactive(
+    app_config: AppConfig,
+) -> Tuple[str, Optional[str]]:
+    """
+    Run the interactive OAuth flow and return (access_token, refresh_token).
+
+    This needs a human: the user must visit a URL and paste back an
+    authorization code.  It is therefore only ever driven from the explicit
+    `drobo <app> auth` command, never from an error path, and it refuses to
+    run without a terminal rather than blocking forever on stdin.
+    """
+    if not app_config.app_key:
+        raise DroboAuthError(f"App '{app_config.name}' has no app_key")
+    if not app_config.app_secret:
+        raise DroboAuthError(f"App '{app_config.name}' has no app_secret")
+
+    if not sys.stdin.isatty():
+        raise DroboAuthError(
+            "Authorization requires an interactive terminal. Run "
+            f"'drobo {app_config.name} auth' from a terminal to authorize."
+        )
+
+    flow = DropboxOAuth2FlowNoRedirect(
+        app_config.app_key,
+        app_config.app_secret,
+        token_access_type="offline",
+        scope=OAUTH_SCOPES,
+        include_granted_scopes="user",
+    )
+
+    auth_url = flow.start()
+    print("1. Go to: " + auth_url)
+    print(
+        "2. Click 'Allow', then paste the code here "
+        "(You might have to log in)."
+    )
+    auth_code = input("Enter the code: ").strip()
+
+    oauth_result = flow.finish(auth_code)
+    return oauth_result.access_token, oauth_result.refresh_token
 
 
 class DropboxClient:
@@ -32,8 +86,10 @@ class DropboxClient:
     def _initialize_client(self) -> None:
         """Initialize the Dropbox client."""
         if not self.app_config.has_valid_tokens():
-            raise ValueError(
-                f"App '{self.app_config.name}' has no valid access tokens"
+            raise DroboAuthError(
+                f"App '{self.app_config.name}' has no access_token and no "
+                f"refresh_token. Run 'drobo {self.app_config.name} auth' "
+                "to authorize."
             )
 
         self._client = dropbox.Dropbox(
@@ -58,52 +114,47 @@ class DropboxClient:
             try:
                 self.refresh_access_token()
                 self.save_tokens()
-                self._initialize_client()
             except Exception as e:
                 logger.error(f"Failed to refresh token: {e}")
-                raise AuthError("Token refresh failed") from e
+                raise DroboAuthError(
+                    f"Could not refresh credentials for app "
+                    f"'{self.app_config.name}': {e}"
+                ) from e
         else:
             raise error
 
     def refresh_access_token(self) -> None:
-        """Refresh the access token using the OAuth2FlowNoRedirect."""
+        """
+        Refresh the access token using the stored refresh token.
+
+        The SDK performs the exchange itself given app_key, app_secret and
+        the refresh token -- no user interaction is involved.  (It also does
+        this automatically before each request; this method exists so an
+        expired-token error can be recovered from explicitly and the new
+        token persisted.)
+        """
+        if not self.app_config.refresh_token:
+            raise DroboAuthError(
+                f"App '{self.app_config.name}' has no refresh_token. Run "
+                f"'drobo {self.app_config.name} auth' to authorize."
+            )
         if not self.app_config.app_key:
-            raise ValueError("No app key available")
+            raise DroboAuthError("No app key available")
         if not self.app_config.app_secret:
-            raise ValueError("No app secret available")
+            raise DroboAuthError("No app secret available")
 
         self._refresh_attempted = True
 
-        try:
-            # Create a temporary client for token refresh
-            flow = DropboxOAuth2FlowNoRedirect(
-                self.app_config.app_key,
-                self.app_config.app_secret,
-                token_access_type="offline",
-                scope=[
-                    "files.metadata.read",
-                    "files.content.read",
-                    "files.content.write",
-                ],
-                include_granted_scopes="user",
+        self._client.refresh_access_token()
+
+        # Copy the SDK's newly issued token back so it can be persisted.
+        new_token = getattr(self._client, "_oauth2_access_token", None)
+        if new_token:
+            self.app_config.update_tokens(
+                new_token, self.app_config.refresh_token
             )
 
-            auth_url = flow.start()
-            print("1. Go to: " + auth_url)
-            print(
-                "2. Click 'Allow', then paste the code here "
-                "(You might have to log in)."
-            )
-            auth_code = input("Enter the code: ").strip()
-
-            oauth_result = flow.finish(auth_code)
-            access_token = oauth_result.access_token
-            refresh_token = oauth_result.refresh_token
-            self.app_config.update_tokens(access_token, refresh_token)
-            logger.info("Access token refreshed and saved")
-        except Exception as e:
-            logger.error(f"Token refresh failed: {e}")
-            raise
+        logger.info("Access token refreshed")
 
     def save_tokens(self) -> None:
         """Save the current access and refresh tokens."""
@@ -127,7 +178,7 @@ class DropboxClient:
         """
         try:
             result = self._client.files_list_folder(path, *args, **kwargs)
-            entries = result.entries
+            entries = list(result.entries)
             while result.has_more:
                 result = self._client.files_list_folder_continue(result.cursor)
                 entries.extend(result.entries)
@@ -157,8 +208,10 @@ class DropboxClient:
 
         except AuthError as e:
             self._handle_auth_error(e)
-            # Retry after token refresh
-            return self.list_folder(path)
+            # Retry after token refresh, preserving the caller's arguments
+            # (dropping them here silently downgraded `ls -R` to a
+            # single-level listing).
+            return self.list_folder(path, *args, **kwargs)
         except ApiError as e:
             logger.error(f"API error listing folder '{path}': {e}")
             raise

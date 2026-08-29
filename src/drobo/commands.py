@@ -77,11 +77,19 @@ def _modified_epoch(item: dict) -> float:
 class CommandHandler:
     """Handles all drobo commands."""
 
-    def __init__(self, app_config: AppConfig, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        app_config: AppConfig,
+        config_manager: ConfigManager,
+        verbose: bool = False,
+    ) -> None:
         self.app_config = app_config
         self.verbose = verbose
-        self.config_manager = ConfigManager()
-        self.client = DropboxClient(app_config, self.config_manager)
+        # The manager is injected rather than rebuilt: constructing a second
+        # one here re-read the config file and left token writes updating a
+        # different AppConfig object than the client was using.
+        self.config_manager = config_manager
+        self.client = DropboxClient(app_config, config_manager)
 
     def _filter_remote_paths(self, items: List[dict], mask: str) -> List[dict]:
         """Filter items by mask using fnmatch."""
@@ -824,7 +832,9 @@ class CommandHandler:
 
 
 def setup_commands(
-    app_config: AppConfig, verbose: bool = False
+    app_config: AppConfig,
+    config_manager: ConfigManager,
+    verbose: bool = False,
 ) -> CommandHandler:
     """Setup and return a command handler."""
-    return CommandHandler(app_config, verbose)
+    return CommandHandler(app_config, config_manager, verbose)

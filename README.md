@@ -34,6 +34,7 @@ source paths, and `ls` and `rm` operate on remote paths only.
 
 ### Commands
 
+- `auth`: Authorize an app and store its access and refresh tokens
 - `ls`: List remote target contents (mimics Linux ls command)
 - `cp`: Copy contents from one location to another (mimics Linux cp command)
 - `mv`: Move contents from one location to another (mimics Linux mv command)
@@ -42,11 +43,15 @@ source paths, and `ls` and `rm` operate on remote paths only.
 ### Options
 
 - `--verbose, -v`: Enable verbose output
+- `--config PATH`: Use an alternate configuration file (default: `~/.droborc`)
 - `--version`: Show version and exit
 
 ### Examples
 
 ```bash
+# Authorize the app (interactive; needed once, before anything else)
+drobo myapp auth
+
 # List contents of the remote root directory
 drobo myapp ls //
 
@@ -82,6 +87,9 @@ drobo myapp rm //unwanted_file.txt
 
 # Remove with force flag (ignore errors)
 drobo myapp rm -f //might_not_exist.txt
+
+# Use a project-local config instead of ~/.droborc
+drobo --config ./project.droborc myapp ls //
 ```
 
 ## Development

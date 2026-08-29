@@ -2,9 +2,55 @@
 Tests for drobo configuration management.
 """
 
+import os
+import stat
+
 import pytest
 
 from drobo.config import AppConfig, ConfigManager
+
+
+class TestCredentialSecurity:
+    """The config file holds secrets; it must not be world-readable."""
+
+    def test_created_config_is_owner_only(self, tmp_path):
+        """A config drobo creates itself must be mode 0600.
+
+        Regression: it was created 0644, exposing app_secret and the
+        refresh token to every other user on the machine.
+        """
+        config_path = tmp_path / ".droborc"
+
+        ConfigManager(config_path)
+
+        mode = stat.S_IMODE(os.stat(config_path).st_mode)
+        assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+    def test_saving_tokens_does_not_loosen_permissions(self, tmp_path):
+        """Writing tokens must not relax the file mode."""
+        config_path = tmp_path / ".droborc"
+        manager = ConfigManager(config_path)
+        manager._apps["example"] = AppConfig(
+            "example", {"app_key": "k", "app_secret": "s"}
+        )
+
+        manager.save_app_tokens("example", "new_access", "new_refresh")
+
+        mode = stat.S_IMODE(os.stat(config_path).st_mode)
+        assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+    def test_permissive_existing_config_warns(self, tmp_path, caplog):
+        """An already-permissive config warns rather than failing."""
+        config_path = tmp_path / ".droborc"
+        ConfigManager(config_path)
+        os.chmod(config_path, 0o644)
+
+        with caplog.at_level("WARNING"):
+            ConfigManager(config_path)
+
+        assert any(
+            "accessible by other users" in r.message for r in caplog.records
+        )
 
 
 class TestAppConfig:
@@ -38,6 +84,33 @@ class TestAppConfig:
             ValueError, match="missing required app_key or app_secret"
         ):
             AppConfig("test_app", config_data)
+
+    def test_refresh_token_alone_is_a_valid_credential(self):
+        """A refresh token with no access token is usable.
+
+        The SDK mints access tokens from app_key + app_secret + refresh
+        token, so rejecting this configuration blocked the more secure
+        setup for no reason.
+        """
+        app_config = AppConfig(
+            "test_app",
+            {
+                "app_key": "test_key",
+                "app_secret": "test_secret",
+                "access_token": "",
+                "refresh_token": "test_refresh",
+            },
+        )
+
+        assert app_config.has_valid_tokens() is True
+
+    def test_no_tokens_at_all_is_invalid(self):
+        """Neither token means there is nothing to authenticate with."""
+        app_config = AppConfig(
+            "test_app", {"app_key": "test_key", "app_secret": "test_secret"}
+        )
+
+        assert app_config.has_valid_tokens() is False
 
     def test_has_valid_tokens(self):
         """Test token validation."""

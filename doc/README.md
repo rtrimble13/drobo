@@ -22,7 +22,13 @@ Drobo is a command-line interface for Dropbox that mimics traditional Unix file 
    # Edit ~/.droborc with your app credentials
    ```
 
-3. **Obtain Access Tokens**: Use the Dropbox OAuth flow to obtain access and refresh tokens for your app.
+3. **Obtain Access Tokens**: Run `drobo <app> auth`. This opens the Dropbox
+   OAuth flow, asks you to paste back an authorization code, and writes the
+   resulting access and refresh tokens into your configuration file. It needs
+   an interactive terminal.
+
+   Once a refresh token is stored, drobo renews the access token on its own --
+   you should not need to run `auth` again unless access is revoked.
 
 4. **Start Using drobo**: Once configured, you can start using drobo commands:
    ```bash
@@ -30,6 +36,21 @@ Drobo is a command-line interface for Dropbox that mimics traditional Unix file 
    ```
 
 ## Command Reference
+
+### auth - Authorize an App
+
+```bash
+drobo <app> auth
+```
+
+Runs the Dropbox OAuth flow for the named app and stores the returned access
+and refresh tokens in the configuration file. Requires an interactive
+terminal; it will refuse to run (rather than hang) when stdin is not a TTY,
+so it is safe to invoke from scripts that may not have one.
+
+```bash
+drobo myapp auth
+```
 
 ### ls - List Directory Contents
 
@@ -189,4 +210,17 @@ drobo -v myapp ls //
 
 ### Token Refresh
 
-If your access token expires, drobo will attempt to refresh it automatically using the refresh token. Ensure your refresh token is valid and stored in the configuration file.
+If your access token expires, drobo refreshes it automatically using the
+stored refresh token -- no interaction is required, so this works from cron
+and scripts. A refresh token on its own is a complete credential: you may
+leave `access_token` empty and drobo will obtain one on first use.
+
+If refresh fails (for example the app's access was revoked), re-authorize
+with `drobo <app> auth`.
+
+### Configuration File Permissions
+
+The configuration file holds your app secret and refresh token, so drobo
+creates it with mode `0600` (owner read/write only) and keeps it that way
+when saving tokens. If an existing file is readable by other users, drobo
+warns on startup; fix it with `chmod 600 ~/.droborc`.
