@@ -26,7 +26,7 @@ Drobo is a command-line interface for Dropbox that mimics traditional Unix file 
 
 4. **Start Using drobo**: Once configured, you can start using drobo commands:
    ```bash
-   drobo myapp ls /
+   drobo myapp ls //
    ```
 
 ## Command Reference
@@ -38,8 +38,6 @@ drobo <app> ls [options] [path]
 ```
 
 Options:
-- `-a, --all`: do not ignore entries starting with '.'
-- `-d, --directory`: list directories themselves, not their contents
 - `-l`: use a long listing format
 - `-r, --reverse`: reverse order while sorting
 - `-R, --recursive`: list subdirectories recursively
@@ -48,12 +46,11 @@ Options:
 
 Examples:
 ```bash
-drobo myapp ls /
-drobo myapp ls -l /Documents
-drobo myapp ls -la /
-drobo myapp ls -altr /Documents  # all files, long format, sorted by time, reversed
-drobo myapp ls -R /               # recursive listing
-drobo myapp ls -S /Documents      # sort by file size
+drobo myapp ls //                 # list the remote root
+drobo myapp ls -l //Documents     # long format
+drobo myapp ls -ltr //Documents   # long format, sorted by time, reversed
+drobo myapp ls -R //              # recursive listing
+drobo myapp ls -S //Documents     # sort by file size
 ```
 
 ### cp - Copy Files
@@ -107,16 +104,32 @@ drobo myapp cp -T //source/file.txt //dest_file.txt
 ### mv - Move/Rename Files
 
 ```bash
-drobo <app> mv <source> <destination>
+drobo <app> mv [options] SOURCE ... DEST
+drobo <app> mv [options] -t DIRECTORY SOURCE ...
 ```
+
+Options:
+- `-f, --force`: do not raise an error if the destination file already exists
+- `-u, --update`: move only when SOURCE is newer than the destination, or the
+  destination is missing
+- `-t, --target-directory=DIRECTORY`: move all SOURCE arguments into DIRECTORY
 
 Examples:
 ```bash
 # Rename file in Dropbox
-drobo myapp mv /old_name.txt /new_name.txt
+drobo myapp mv //old_name.txt //new_name.txt
 
-# Move file to different directory
-drobo myapp mv /file.txt /subfolder/file.txt
+# Move file to a different directory
+drobo myapp mv //file.txt //subfolder/file.txt
+
+# Move multiple files into a directory
+drobo myapp mv -t //documents //file1.txt //file2.txt
+
+# Overwrite an existing destination
+drobo myapp mv -f //source.txt //existing_dest.txt
+
+# Move only if the source is newer
+drobo myapp mv -u //source.txt //dest.txt
 ```
 
 ### rm - Remove Files
@@ -126,18 +139,22 @@ drobo <app> rm [options] <file1> [file2 ...]
 ```
 
 Options:
-- `-f`: Force removal (ignore errors)
+- `-f, --force`: ignore nonexistent files and arguments, never prompt
+- `-r, --recursive`: remove directories and their contents recursively
 
 Examples:
 ```bash
 # Remove single file
-drobo myapp rm /unwanted_file.txt
+drobo myapp rm //unwanted_file.txt
 
 # Remove multiple files
-drobo myapp rm /file1.txt /file2.txt
+drobo myapp rm //file1.txt //file2.txt
 
 # Force remove (ignore errors)
-drobo myapp rm -f /might_not_exist.txt
+drobo myapp rm -f //might_not_exist.txt
+
+# Remove a directory and its contents
+drobo myapp rm -r //directory
 ```
 
 ## Configuration File Format
@@ -167,7 +184,7 @@ You can define multiple apps in the same file by using different app names.
 Drobo logs all operations to `~/.drobo.log`. Use the verbose flag (`-v`) for more detailed output:
 
 ```bash
-drobo -v myapp ls /
+drobo -v myapp ls //
 ```
 
 ### Token Refresh

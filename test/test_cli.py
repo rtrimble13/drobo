@@ -72,6 +72,39 @@ class TestCLI:
             sort_by_time=False,
         )
 
+    def test_ls_without_path_argument_defaults_to_remote_root(self, mocker):
+        """`drobo <app> ls` with no PATH must target the remote root.
+
+        Regression: the argument default used to be "/", which
+        ls_with_options rejects as a local path, so the bare command
+        always exited 1.
+        """
+        mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
+        mock_setup_commands = mocker.patch("drobo.cli.setup_commands")
+
+        mock_manager = mocker.Mock()
+        mock_manager.get_app_config.return_value = AppConfig(
+            "test_app",
+            {
+                "app_key": "test_key",
+                "app_secret": "test_secret",
+                "access_token": "test_token",
+            },
+        )
+        mock_config_manager.return_value = mock_manager
+        mock_setup_commands.return_value = mocker.Mock()
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["test_app", "ls"])
+
+        assert result.exit_code == 0
+        assert (
+            mock_setup_commands.return_value.ls_with_options.call_args.kwargs[
+                "path"
+            ]
+            == "//"
+        )
+
     def test_app_command_nonexistent_app(self, mocker):
         """Test app command with non-existent app."""
         mock_config_manager = mocker.patch("drobo.cli.ConfigManager")
@@ -205,7 +238,7 @@ class TestCLI:
 
         assert result.exit_code == 0
         mock_handler.ls_with_options.assert_called_once_with(
-            path="/",
+            path="//",
             long_format=False,
             reverse=True,
             recursive=True,

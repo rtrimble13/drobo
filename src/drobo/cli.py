@@ -93,7 +93,7 @@ def get_command_handler(ctx):
 
 
 @cli.command()
-@click.argument("path", default="/")
+@click.argument("path", default="//")
 @click.option(
     "-l", "long_format", is_flag=True, help="use a long listing format"
 )

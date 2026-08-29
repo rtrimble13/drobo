@@ -2,6 +2,7 @@
 Tests for drobo command handlers.
 """
 
+from datetime import datetime
 from unittest.mock import Mock
 
 import pytest
@@ -167,26 +168,34 @@ class TestCommandHandler:
         mock_echo.assert_has_calls(expected_calls, any_order=False)
 
     def test_ls_with_sort_by_time(self, command_handler, mocker):
-        """Test ls with -t option."""
+        """Test ls with -t option.
+
+        Uses datetime values and a folder entry with no "modified" key,
+        matching what DropboxClient.list_folder actually produces.  An
+        earlier version of this test used string dates and no folders,
+        which made every sort key the same type and hid a TypeError.
+        """
         mock_items = [
             {
                 "name": "old.txt",
                 "type": "file",
                 "size": 100,
-                "modified": "2023-01-01",
+                "modified": datetime(2023, 1, 1),
             },
             {
                 "name": "newest.txt",
                 "type": "file",
                 "size": 200,
-                "modified": "2023-01-03",
+                "modified": datetime(2023, 1, 3),
             },
             {
                 "name": "newer.txt",
                 "type": "file",
                 "size": 300,
-                "modified": "2023-01-02",
+                "modified": datetime(2023, 1, 2),
             },
+            # Folders carry no size and no modified timestamp.
+            {"name": "subdir", "type": "folder"},
         ]
         command_handler.client.list_folder.return_value = mock_items
 
@@ -194,13 +203,29 @@ class TestCommandHandler:
 
         command_handler.ls_with_options(path="//", sort_by_time=True)
 
-        # Should show files sorted by time, newest first
+        # Files newest-first; the folder has no timestamp so it sorts last.
         expected_calls = [
             mocker.call("newest.txt"),  # 2023-01-03
             mocker.call("newer.txt"),  # 2023-01-02
             mocker.call("old.txt"),  # 2023-01-01
         ]
         mock_echo.assert_has_calls(expected_calls, any_order=False)
+
+    def test_ls_sort_by_time_accepts_string_timestamps(
+        self, command_handler, mocker
+    ):
+        """ISO-8601 string timestamps sort alongside datetime ones."""
+        command_handler.client.list_folder.return_value = [
+            {"name": "b.txt", "type": "file", "modified": "2023-01-01"},
+            {"name": "a.txt", "type": "file", "modified": datetime(2024, 1, 1)},
+        ]
+        mock_echo = mocker.patch("drobo.commands.click.echo")
+
+        command_handler.ls_with_options(path="//", sort_by_time=True)
+
+        mock_echo.assert_has_calls(
+            [mocker.call("a.txt"), mocker.call("b.txt")], any_order=False
+        )
 
     def test_ls_combined_options(self, command_handler, mocker):
         """Test ls with combined options like -la."""
@@ -370,6 +395,63 @@ class TestCommandHandler:
         mock_download.assert_called_once_with(
             "remote/file", "/home/user/local_file"
         )
+
+    def test_cp_remote_dir_to_local_without_recursive_reports_directory(
+        self, command_handler
+    ):
+        """Copying a remote directory without -r must say so.
+
+        Regression: a blanket `except Exception` around the whole helper
+        swallowed this ValueError and relabelled it "No such file or
+        directory".
+        """
+        command_handler.client.get_metadata.return_value = {"type": "folder"}
+
+        with pytest.raises(ValueError, match="use -r for recursive copy"):
+            command_handler._copy_remote_to_local(
+                "/remote_dir", "/tmp/dest", False, False
+            )
+
+    def test_cp_remote_dir_to_remote_without_recursive_reports_directory(
+        self, command_handler
+    ):
+        """Same for remote-to-remote copies."""
+        command_handler.client.get_metadata.return_value = {"type": "folder"}
+
+        with pytest.raises(ValueError, match="use -r for recursive copy"):
+            command_handler._copy_remote_to_remote(
+                "/remote_dir", "/other_dir", False, False
+            )
+
+    def test_cp_missing_remote_source_still_reports_not_found(
+        self, command_handler
+    ):
+        """A failed metadata lookup does still mean "no such file"."""
+        command_handler.client.get_metadata.side_effect = Exception("not_found")
+
+        with pytest.raises(ValueError, match="No such file or directory"):
+            command_handler._copy_remote_to_local(
+                "/missing.txt", "/tmp/dest", False, False
+            )
+
+    def test_cp_transport_failure_is_not_relabelled_as_missing_file(
+        self, command_handler
+    ):
+        """A network failure during transfer must surface as itself.
+
+        Previously any error raised below the metadata lookup — auth
+        failures, rate limits, dropped connections — reached the user as
+        "No such file or directory", making the tool undiagnosable.
+        """
+        command_handler.client.get_metadata.return_value = {"type": "file"}
+        command_handler.client.download_file.side_effect = ConnectionError(
+            "connection reset"
+        )
+
+        with pytest.raises(ConnectionError, match="connection reset"):
+            command_handler._copy_remote_to_local(
+                "/remote.txt", "/tmp/dest.txt", False, True
+            )
 
     def test_cp_recursive_flag(self, command_handler, mocker):
         """Test cp with -r flag for recursive directory copy."""

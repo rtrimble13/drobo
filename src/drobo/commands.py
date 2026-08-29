@@ -7,6 +7,7 @@ import glob
 import logging
 import os
 import re
+from datetime import datetime
 from typing import List
 
 import click
@@ -47,6 +48,30 @@ def _normalize_local_path(path: str) -> str:
 def _has_wildcards(path: str) -> bool:
     """Check if the path contains wildcard characters."""
     return bool(re.search(r"[\*\?\[\]]", path))
+
+
+def _modified_epoch(item: dict) -> float:
+    """
+    Sort key for 'ls -t'.
+
+    Normalizes an item's "modified" value to a single numeric epoch so that
+    entries of differing shapes remain mutually comparable.  Folders carry no
+    "modified" key at all (see DropboxClient.list_folder), and files carry a
+    datetime; returning a mix of types makes sorted() raise TypeError.
+    Entries without a usable timestamp sort oldest.
+    """
+    modified = item.get("modified")
+
+    if hasattr(modified, "timestamp"):
+        return modified.timestamp()
+
+    if isinstance(modified, str) and modified:
+        try:
+            return datetime.fromisoformat(modified).timestamp()
+        except ValueError:
+            return 0.0
+
+    return 0.0
 
 
 class CommandHandler:
@@ -116,18 +141,7 @@ class CommandHandler:
                         items, key=lambda x: x.get("size", 0), reverse=True
                     )
                 elif sort_by_time:
-                    # Use modified time for sorting,
-                    # handle both string and datetime
-                    def get_modified_time(item):
-                        modified = item.get("modified", "")
-                        if hasattr(modified, "timestamp"):
-                            return modified.timestamp()
-                        elif isinstance(modified, str):
-                            return modified
-                        else:
-                            return ""
-
-                    items = sorted(items, key=get_modified_time, reverse=True)
+                    items = sorted(items, key=_modified_epoch, reverse=True)
                 else:
                     # Default sort by name
                     items = sorted(items, key=lambda x: x["name"])
@@ -611,6 +625,17 @@ class CommandHandler:
                 "destinations"
             )
 
+    def _require_metadata(self, source: str) -> dict:
+        """
+        Fetch metadata for a remote source, treating a lookup failure as
+        "no such file".  Any other failure is left alone so it reaches the
+        user as itself rather than as a bogus missing-file error.
+        """
+        try:
+            return self.client.get_metadata(source)
+        except Exception as e:
+            raise ValueError(f"'{source}': No such file or directory") from e
+
     def _copy_local_to_remote(
         self,
         source: str,
@@ -647,40 +672,39 @@ class CommandHandler:
         treat_target_as_file: bool,
     ) -> None:
         """Copy from remote to local."""
-        try:
-            # Check if source is a file or directory by attempting to get
-            # its metadata
-            metadata = self.client.get_metadata(source)
-            if metadata.get("type") == "file":
-                if treat_target_as_file:
-                    self.client.download_file(source, destination)
-                else:
-                    # If destination is a directory, copy into it
-                    if os.path.isdir(destination):
-                        filename = os.path.basename(source)
-                        dest_file = os.path.join(destination, filename)
-                        self.client.download_file(source, dest_file)
-                    else:
-                        self.client.download_file(source, destination)
-            elif metadata.get("type") == "folder":
-                if not recursive:
-                    raise ValueError(
-                        f"'{source}' is a directory (use -r for recursive copy)"
-                    )
-                # Handle directory copy based on use case 2
-                source_dir_name = os.path.basename(source.rstrip("/"))
-                if os.path.exists(destination):
-                    # Destination exists, create subdirectory with source's name
-                    actual_dest = os.path.join(destination, source_dir_name)
-                else:
-                    # Destination doesn't exist, create it and copy directly
-                    actual_dest = destination
+        # Only a failed metadata lookup means "source not found".  Keep the
+        # try narrow: wrapping the transfer below would relabel auth, rate
+        # limit and network failures as a missing file.
+        metadata = self._require_metadata(source)
 
-                self._download_directory_contents(source, actual_dest)
+        if metadata.get("type") == "file":
+            if treat_target_as_file:
+                self.client.download_file(source, destination)
             else:
-                raise ValueError(f"'{source}': Unknown file type")
-        except Exception:
-            raise ValueError(f"'{source}': No such file or directory")
+                # If destination is a directory, copy into it
+                if os.path.isdir(destination):
+                    filename = os.path.basename(source)
+                    dest_file = os.path.join(destination, filename)
+                    self.client.download_file(source, dest_file)
+                else:
+                    self.client.download_file(source, destination)
+        elif metadata.get("type") == "folder":
+            if not recursive:
+                raise ValueError(
+                    f"'{source}' is a directory (use -r for recursive copy)"
+                )
+            # Handle directory copy based on use case 2
+            source_dir_name = os.path.basename(source.rstrip("/"))
+            if os.path.exists(destination):
+                # Destination exists, create subdirectory with source's name
+                actual_dest = os.path.join(destination, source_dir_name)
+            else:
+                # Destination doesn't exist, create it and copy directly
+                actual_dest = destination
+
+            self._download_directory_contents(source, actual_dest)
+        else:
+            raise ValueError(f"'{source}': Unknown file type")
 
     def _copy_remote_to_remote(
         self,
@@ -690,30 +714,27 @@ class CommandHandler:
         treat_target_as_file: bool,
     ) -> None:
         """Copy from remote to remote."""
-        try:
-            # Check if source is a file or directory
-            metadata = self.client.get_metadata(source)
-            if metadata.get("type") == "file":
-                if treat_target_as_file or not self._is_remote_directory(
-                    destination
-                ):
-                    # Copy to specific file path
-                    self.client.copy_file(source, destination)
-                else:
-                    # Copy into directory
-                    filename = os.path.basename(source)
-                    dest_file = os.path.join(destination, filename)
-                    self.client.copy_file(source, dest_file)
-            elif metadata.get("type") == "folder":
-                if not recursive:
-                    raise ValueError(
-                        f"'{source}' is a directory (use -r for recursive copy)"
-                    )
-                self._copy_directory_recursive_remote(source, destination)
+        metadata = self._require_metadata(source)
+
+        if metadata.get("type") == "file":
+            if treat_target_as_file or not self._is_remote_directory(
+                destination
+            ):
+                # Copy to specific file path
+                self.client.copy_file(source, destination)
             else:
-                raise ValueError(f"'{source}': Unknown file type")
-        except Exception:
-            raise ValueError(f"'{source}': No such file or directory")
+                # Copy into directory
+                filename = os.path.basename(source)
+                dest_file = os.path.join(destination, filename)
+                self.client.copy_file(source, dest_file)
+        elif metadata.get("type") == "folder":
+            if not recursive:
+                raise ValueError(
+                    f"'{source}' is a directory (use -r for recursive copy)"
+                )
+            self._copy_directory_recursive_remote(source, destination)
+        else:
+            raise ValueError(f"'{source}': Unknown file type")
 
     def _is_remote_directory(self, path: str) -> bool:
         """Check if a remote path is a directory."""

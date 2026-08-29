@@ -4,6 +4,7 @@ Dropbox API client for drobo.
 
 import logging
 import os
+import tempfile
 from typing import List
 
 import dropbox
@@ -163,11 +164,39 @@ class DropboxClient:
             raise
 
     def download_file(self, remote_path: str, local_path: str) -> None:
-        """Download a file from Dropbox."""
+        """
+        Download a file from Dropbox.
+
+        Writes to a temporary file alongside the destination and renames it
+        into place only once the transfer has completed, so that a failed
+        download cannot destroy an existing local file.  The temporary file
+        is created in the destination directory to keep the rename atomic.
+        """
         try:
-            with open(local_path, "wb") as f:
-                metadata, response = self._client.files_download(remote_path)
-                f.write(response.content)
+            dest_dir = os.path.dirname(os.path.abspath(local_path)) or "."
+            fd, tmp_path = tempfile.mkstemp(
+                dir=dest_dir, prefix=".drobo-", suffix=".part"
+            )
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    metadata, response = self._client.files_download(
+                        remote_path
+                    )
+                    f.write(response.content)
+
+                # mkstemp creates 0600; downloaded files should follow the
+                # user's umask the way a normal write would.
+                umask = os.umask(0)
+                os.umask(umask)
+                os.chmod(tmp_path, 0o666 & ~umask)
+
+                os.replace(tmp_path, local_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
             logger.info(f"Downloaded {remote_path} to {local_path}")
 

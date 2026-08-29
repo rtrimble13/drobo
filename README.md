@@ -25,6 +25,13 @@ refresh_token = "your_refresh_token"
 drobo <app name> <command> [options]
 ```
 
+### Path conventions
+
+Remote (Dropbox) paths begin with `//`; local paths follow normal Linux
+conventions. This is what distinguishes the two — `//documents/file.txt` is
+remote, `./documents/file.txt` is local. Wildcards (`*`, `?`) are supported in
+source paths, and `ls` and `rm` operate on remote paths only.
+
 ### Commands
 
 - `ls`: List remote target contents (mimics Linux ls command)
@@ -40,20 +47,20 @@ drobo <app name> <command> [options]
 ### Examples
 
 ```bash
-# List contents of root directory
-drobo myapp ls /
+# List contents of the remote root directory
+drobo myapp ls //
 
 # List with detailed output
-drobo myapp ls -l /Documents
+drobo myapp ls -l //Documents
 
 # Copy local file to Dropbox
-drobo myapp cp local_file.txt /remote_file.txt
+drobo myapp cp local_file.txt //remote_file.txt
 
 # Copy Dropbox file to local
-drobo myapp cp /remote_file.txt local_file.txt
+drobo myapp cp //remote_file.txt local_file.txt
 
 # Move file within Dropbox
-drobo myapp mv /old_location.txt /new_location.txt
+drobo myapp mv //old_location.txt //new_location.txt
 
 # Move multiple files to a directory
 drobo myapp mv //file1.txt //file2.txt //documents/
@@ -71,10 +78,10 @@ drobo myapp mv -f //source.txt //existing_dest.txt
 drobo myapp mv -u //source.txt //dest.txt
 
 # Remove file from Dropbox
-drobo myapp rm /unwanted_file.txt
+drobo myapp rm //unwanted_file.txt
 
 # Remove with force flag (ignore errors)
-drobo myapp rm -f /might_not_exist.txt
+drobo myapp rm -f //might_not_exist.txt
 ```
 
 ## Development
