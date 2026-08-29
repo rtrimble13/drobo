@@ -456,6 +456,35 @@ class TestCommandHandler:
                 "/remote.txt", "/tmp/dest.txt", False, True
             )
 
+    def test_remote_directory_lookups_are_cached(self, command_handler):
+        """Repeated directory checks must not re-hit the network.
+
+        The recursive helpers ask about the same directories repeatedly --
+        _upload_directory_recursive checks every directory it has just
+        created -- so each lookup being a round-trip added up quickly.
+        """
+        command_handler.client.get_metadata.return_value = {"type": "folder"}
+
+        assert command_handler._is_remote_directory("/docs") is True
+        assert command_handler._is_remote_directory("/docs") is True
+        assert command_handler._is_remote_directory("/docs") is True
+
+        assert command_handler.client.get_metadata.call_count == 1
+
+    def test_negative_directory_lookups_are_cached_too(self, command_handler):
+        command_handler.client.get_metadata.return_value = {"type": "file"}
+
+        assert command_handler._is_remote_directory("/a.txt") is False
+        assert command_handler._is_remote_directory("/a.txt") is False
+
+        assert command_handler.client.get_metadata.call_count == 1
+
+    def test_root_is_a_directory_without_a_lookup(self, command_handler):
+        assert command_handler._is_remote_directory("/") is True
+        assert command_handler._is_remote_directory("//") is True
+
+        command_handler.client.get_metadata.assert_not_called()
+
     def test_cp_recursive_flag(self, command_handler, mocker):
         """Test cp with -r flag for recursive directory copy."""
         mock_is_remote_path = mocker.patch("drobo.commands._is_remote_path")

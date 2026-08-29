@@ -7,11 +7,13 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
-from dropbox.exceptions import AuthError
+import requests
+from dropbox.exceptions import AuthError, RateLimitError
 from dropbox.files import FileMetadata, FolderMetadata
 
 from drobo.config import AppConfig
 from drobo.dropbox_client import (
+    MAX_ATTEMPTS,
     DroboAuthError,
     DropboxClient,
     authorize_interactive,
@@ -496,3 +498,118 @@ class TestAuthRetryOnEveryOperation:
 
         client._handle_auth_error.assert_called_once()
         assert getattr(client._client, sdk_attr).call_count == 2
+
+
+class TestRetryPolicy:
+    """Transient failures back off and retry; real errors do not."""
+
+    def _rate_limited(self, backoff=None):
+        return RateLimitError("request-1", None, backoff)
+
+    def test_rate_limit_is_retried_and_then_succeeds(self, no_real_sleeping):
+        client = _client()
+        client._client.files_get_metadata.side_effect = [
+            self._rate_limited(),
+            FolderMetadata(name="docs", path_display="/docs"),
+        ]
+
+        meta = client.get_metadata("/docs")
+
+        assert meta["type"] == "folder"
+        assert client._client.files_get_metadata.call_count == 2
+        assert len(no_real_sleeping) == 1
+
+    def test_servers_backoff_hint_is_honoured(self, no_real_sleeping):
+        """Dropbox says how long to wait; that wins over our own schedule."""
+        client = _client()
+        client._client.files_get_metadata.side_effect = [
+            self._rate_limited(backoff=17.0),
+            FolderMetadata(name="docs", path_display="/docs"),
+        ]
+
+        client.get_metadata("/docs")
+
+        # Jitter adds up to 25%, so check the band rather than equality.
+        assert 17.0 <= no_real_sleeping[0] <= 17.0 * 1.25
+
+    def test_backoff_grows_exponentially(self, no_real_sleeping):
+        client = _client()
+        client._client.files_get_metadata.side_effect = [
+            self._rate_limited(),
+            self._rate_limited(),
+            self._rate_limited(),
+            FolderMetadata(name="docs", path_display="/docs"),
+        ]
+
+        client.get_metadata("/docs")
+
+        assert len(no_real_sleeping) == 3
+        assert no_real_sleeping[0] < no_real_sleeping[1] < no_real_sleeping[2]
+
+    def test_retries_are_capped_and_the_error_survives(self, no_real_sleeping):
+        client = _client()
+        client._client.files_get_metadata.side_effect = self._rate_limited()
+
+        with pytest.raises(RateLimitError):
+            client.get_metadata("/docs")
+
+        assert client._client.files_get_metadata.call_count == MAX_ATTEMPTS
+
+    def test_transient_network_error_is_retried_for_reads(
+        self, no_real_sleeping
+    ):
+        client = _client()
+        client._client.files_get_metadata.side_effect = [
+            requests.exceptions.ConnectionError("reset"),
+            FolderMetadata(name="docs", path_display="/docs"),
+        ]
+
+        client.get_metadata("/docs")
+
+        assert client._client.files_get_metadata.call_count == 2
+
+    def test_transient_network_error_is_not_retried_for_writes(
+        self, no_real_sleeping
+    ):
+        """A dropped connection on a write may already have been applied.
+
+        Repeating it blindly could duplicate or re-apply the change, so
+        writes retry rate limits only.
+        """
+        client = _client()
+        client._client.files_delete_v2.side_effect = (
+            requests.exceptions.ConnectionError("reset")
+        )
+
+        with pytest.raises(requests.exceptions.ConnectionError):
+            client.delete_file("/a")
+
+        assert client._client.files_delete_v2.call_count == 1
+        assert no_real_sleeping == []
+
+    def test_rate_limit_is_still_retried_for_writes(self, no_real_sleeping):
+        """A 429 was rejected without being acted on, so it is safe."""
+        client = _client()
+        client._client.files_delete_v2.side_effect = [
+            self._rate_limited(),
+            None,
+        ]
+
+        client.delete_file("/a")
+
+        assert client._client.files_delete_v2.call_count == 2
+
+    def test_ordinary_api_errors_are_not_retried(self, no_real_sleeping):
+        """A missing file will not become present; do not waste time."""
+        from dropbox.exceptions import ApiError
+
+        client = _client()
+        client._client.files_get_metadata.side_effect = ApiError(
+            "req", Mock(), "not_found", None
+        )
+
+        with pytest.raises(ApiError):
+            client.get_metadata("/missing")
+
+        assert client._client.files_get_metadata.call_count == 1
+        assert no_real_sleeping == []

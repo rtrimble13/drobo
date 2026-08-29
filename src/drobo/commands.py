@@ -90,6 +90,10 @@ class CommandHandler:
         # different AppConfig object than the client was using.
         self.config_manager = config_manager
         self.client = DropboxClient(app_config, config_manager)
+        # Remote directory lookups are network round-trips and the recursive
+        # helpers repeat them heavily -- _upload_directory_recursive asks
+        # about every directory it has just created.  Cache within the run.
+        self._remote_dir_cache = {}
 
     def _filter_remote_paths(self, items: List[dict], mask: str) -> List[dict]:
         """Filter items by mask using fnmatch."""
@@ -748,11 +752,22 @@ class CommandHandler:
         """Check if a remote path is a directory."""
         if path in ["/", "//"]:
             return True  # root is a directory
+
+        if path in self._remote_dir_cache:
+            return self._remote_dir_cache[path]
+
         try:
             metadata = self.client.get_metadata(path)
-            return metadata.get("type") == "folder"
+            is_dir = metadata.get("type") == "folder"
         except Exception:
-            return False
+            is_dir = False
+
+        self._remote_dir_cache[path] = is_dir
+        return is_dir
+
+    def _note_remote_directory(self, path: str) -> None:
+        """Record a directory drobo has just created."""
+        self._remote_dir_cache[path] = True
 
     def _download_directory_contents(
         self, remote_dir: str, local_dest: str
@@ -809,6 +824,7 @@ class CommandHandler:
 
         if not self._is_remote_directory(remote_base):
             self.client.create_folder(remote_base)
+            self._note_remote_directory(remote_base)
 
         for root, dirs, files in os.walk(local_dir):
             # Create corresponding remote directory
@@ -821,6 +837,7 @@ class CommandHandler:
                 )
                 if not self._is_remote_directory(remote_subdir):
                     self.client.create_folder(remote_subdir)
+                    self._note_remote_directory(remote_subdir)
 
             for file in files:
                 local_file_path = os.path.join(root, file)

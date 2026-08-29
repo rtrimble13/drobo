@@ -26,7 +26,9 @@ requires-python = ">=3.10"
 dependencies = [
     "click>=8.0.0",
     "dropbox>=11.0.0",
-    "configistate>=1.0.0"
+    "configistate>=1.0.0",
+    # Imported directly for its transient-error types in the retry layer.
+    "requests>=2.25.0"
 ]
 
 [project.optional-dependencies]

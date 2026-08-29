@@ -218,6 +218,20 @@ leave `access_token` empty and drobo will obtain one on first use.
 If refresh fails (for example the app's access was revoked), re-authorize
 with `drobo <app> auth`.
 
+### Rate Limits and Transient Failures
+
+Bulk operations (a recursive `cp` of a large tree) issue many sequential API
+calls and can draw Dropbox rate limits. drobo retries these automatically
+with exponential backoff, honouring the delay Dropbox asks for. Run with
+`-v` to see retries as they happen.
+
+Read operations also retry transient network errors. Write operations retry
+rate limits only -- a dropped connection on a write may already have been
+applied server-side, so repeating it blindly is not safe.
+
+Errors that will not fix themselves (a missing file, a bad path, an expired
+token) are reported immediately rather than retried.
+
 ### Configuration File Permissions
 
 The configuration file holds your app secret and refresh token, so drobo
