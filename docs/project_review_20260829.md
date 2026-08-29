@@ -1,5 +1,44 @@
 # Project Review — drobo — 2026-08-29
 
+## Status
+
+All four P0 defects, all eight P1 findings, and the documentation drift have
+been fixed on `claude/project-review-enhancements-cl1baz`. The two P2 items
+(chunked transfers for files over 150 MB, and the remaining below-cap items)
+are still open.
+
+Test count went from 55 to 113; `src/drobo/dropbox_client.py` went from 0% to
+85% line coverage, and coverage is now measured on every run with a 70% floor.
+Every fix carries a regression test that was confirmed to fail against the
+unfixed source.
+
+Findings below are left as written at review time; each links to its issue.
+
+| Finding | Issue | Status |
+|---|---|---|
+| `ls` with no PATH always fails | [#13](https://github.com/rtrimble13/drobo/issues/13) | Fixed |
+| `download_file` truncates destination | [#14](https://github.com/rtrimble13/drobo/issues/14) | Fixed |
+| `ls -t` crashes on mixed listings | [#15](https://github.com/rtrimble13/drobo/issues/15) | Fixed |
+| `cp` masks every failure | [#16](https://github.com/rtrimble13/drobo/issues/16) | Fixed |
+| Refresh-token-only rejected; interactive OAuth | [#17](https://github.com/rtrimble13/drobo/issues/17) | Fixed |
+| No retry or backoff | [#18](https://github.com/rtrimble13/drobo/issues/18) | Fixed |
+| `AuthError` raises TypeError | [#19](https://github.com/rtrimble13/drobo/issues/19) | Fixed |
+| Publish workflow cannot publish | [#20](https://github.com/rtrimble13/drobo/issues/20) | Fixed |
+| `.droborc` world-readable | [#21](https://github.com/rtrimble13/drobo/issues/21) | Fixed |
+| Retry drops kwargs | [#22](https://github.com/rtrimble13/drobo/issues/22) | Fixed |
+| `dropbox_client.py` untested | [#23](https://github.com/rtrimble13/drobo/issues/23) | Fixed (0% → 85%) |
+| Duplicate `ConfigManager` | [#24](https://github.com/rtrimble13/drobo/issues/24) | Fixed |
+| Docs contradict code | [#25](https://github.com/rtrimble13/drobo/issues/25) | Fixed |
+| Whole-file buffering (>150 MB) | [#26](https://github.com/rtrimble13/drobo/issues/26) | Open |
+| Coverage never measured | [#27](https://github.com/rtrimble13/drobo/issues/27) | Fixed |
+
+Two changes went slightly beyond the findings as filed, because the fixes
+would otherwise have been unreachable or untestable: a `drobo <app> auth`
+command (the interactive OAuth flow had to move off the error path, and
+without a command it would have been dead code — the docs had been promising
+this tool since the beginning), and a `--config PATH` option (`ConfigManager`
+already accepted the path; injecting it was the fix for #24).
+
 ## Verdict & summary
 
 drobo is a small, cleanly layered Dropbox CLI (~1,550 lines of source) with a genuinely good structural idea: a strict `//` prefix to disambiguate remote from local paths, and a command surface that mirrors GNU coreutils closely enough to be predictable. The architecture is sound and the layering (`cli.py` → `commands.py` → `dropbox_client.py`) is worth preserving as-is.
