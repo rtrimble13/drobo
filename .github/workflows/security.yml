@@ -19,7 +19,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Dependency Review
         # Requires the repository's Dependency Graph feature, which is
         # currently disabled (Settings > Code security and analysis), so
@@ -28,16 +28,16 @@ jobs:
         # `audit` job below covers vulnerable dependencies in the meantime
         # and does block. Drop continue-on-error once the graph is enabled.
         continue-on-error: true
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
 
   audit:
     # Runs on push as well, so a newly disclosed advisory against an
     # unchanged dependency is still caught.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install project
@@ -55,9 +55,9 @@ jobs:
   bandit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Static analysis of source for common security issues
