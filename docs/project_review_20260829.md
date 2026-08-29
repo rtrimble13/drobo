@@ -2,15 +2,14 @@
 
 ## Status
 
-All four P0 defects, all eight P1 findings, and the documentation drift have
-been fixed on `claude/project-review-enhancements-cl1baz`. The two P2 items
-(chunked transfers for files over 150 MB, and the remaining below-cap items)
-are still open.
+Every finding in this report has been fixed on
+`claude/project-review-enhancements-cl1baz` -- all four P0 defects, all eight
+P1 findings, both P2 items, and every below-cap item.
 
-Test count went from 55 to 113; `src/drobo/dropbox_client.py` went from 0% to
-85% line coverage, and coverage is now measured on every run with a 70% floor.
-Every fix carries a regression test that was confirmed to fail against the
-unfixed source.
+Test count went from 55 to 131; `src/drobo/dropbox_client.py` went from 0% to
+86% line coverage and the project total is 78%, measured on every run with a
+70% floor. Every fix carries a regression test that was confirmed to fail
+against the unfixed source.
 
 Findings below are left as written at review time; each links to its issue.
 
@@ -29,7 +28,7 @@ Findings below are left as written at review time; each links to its issue.
 | `dropbox_client.py` untested | [#23](https://github.com/rtrimble13/drobo/issues/23) | Fixed (0% → 85%) |
 | Duplicate `ConfigManager` | [#24](https://github.com/rtrimble13/drobo/issues/24) | Fixed |
 | Docs contradict code | [#25](https://github.com/rtrimble13/drobo/issues/25) | Fixed |
-| Whole-file buffering (>150 MB) | [#26](https://github.com/rtrimble13/drobo/issues/26) | Open |
+| Whole-file buffering (>150 MB) | [#26](https://github.com/rtrimble13/drobo/issues/26) | Fixed |
 | Coverage never measured | [#27](https://github.com/rtrimble13/drobo/issues/27) | Fixed |
 
 Two changes went slightly beyond the findings as filed, because the fixes
@@ -174,7 +173,8 @@ Ordered by priority tier, then severity. All 15 are filed as GitHub issues.
 
 ### Below the backlog cap
 
-Real but minor; noted here without work items.
+Real but minor; noted here without work items. **All of these have since been
+fixed** on the review branch.
 
 - **`mv` reports errors with a `cp:` prefix.** `_validate_source_consistency` and `_validate_destination_for_multiple_files` hardcode `"cp: ..."` (`commands.py:542,555,562`) but are called from `mv` (`commands.py:262,267`). Reproduced: `mv` of mixed sources prints `cp: cannot mix remote and local source files`. Pass the command name in.
 - **Missing local sources are silently dropped.** `_expand_source_wildcards` only extends when `glob.glob` matches (`commands.py:528-530`), so `cp missing.txt //dest` reports "no files matched" rather than "No such file or directory". Distinguish a literal path from a glob.
