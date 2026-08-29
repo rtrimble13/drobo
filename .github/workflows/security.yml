@@ -11,18 +11,50 @@ on:
     branches:
       - main
       - 'feature/*'
+
 jobs:
   dependency-review:
+    # Only meaningful on a pull request: the action diffs the PR's
+    # dependency changes against the base branch.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+
+  audit:
+    # Runs on push as well, so a newly disclosed advisory against an
+    # unchanged dependency is still caught.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Dependency Review (PR only)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v3
+          python-version: '3.13'
+      - name: Install project
+        run: |
+          # setuptools is upgraded explicitly: the runner's bundled version
+          # carries advisories of its own, and it is build tooling rather
+          # than a drobo dependency.
+          python -m pip install --upgrade pip setuptools
+          pip install -e .
+      - name: Audit dependencies for known vulnerabilities
+        run: |
+          pip install pip-audit
+          pip-audit --progress-spinner off
+
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Static analysis of source for common security issues
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit
+          bandit -r src/ -ll

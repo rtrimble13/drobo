@@ -2,6 +2,7 @@
 Tests for drobo command handlers.
 """
 
+import pathlib
 from datetime import datetime
 from unittest.mock import Mock
 
@@ -484,6 +485,116 @@ class TestCommandHandler:
         assert command_handler._is_remote_directory("//") is True
 
         command_handler.client.get_metadata.assert_not_called()
+
+    def test_mv_reports_its_own_name_in_errors(self, command_handler):
+        """mv must not report errors as if it were cp.
+
+        These validators are shared, and previously hardcoded a "cp:"
+        prefix regardless of which command called them.
+        """
+        with pytest.raises(ValueError, match="^mv: cannot mix"):
+            command_handler._validate_source_consistency(
+                ["//remote.txt", "local.txt"], "mv"
+            )
+
+    def test_cp_still_reports_its_own_name(self, command_handler):
+        with pytest.raises(ValueError, match="^cp: cannot mix"):
+            command_handler._validate_source_consistency(
+                ["//remote.txt", "local.txt"]
+            )
+
+    def test_missing_local_source_is_named(self, command_handler, tmp_path):
+        """An absent literal source must say which file is missing.
+
+        It used to be dropped silently by the glob expansion and then
+        reported as the misleading "no files matched".
+        """
+        missing = str(tmp_path / "nope.txt")
+
+        with pytest.raises(ValueError, match="nope.txt"):
+            command_handler._expand_source_wildcards([missing])
+
+    def test_existing_local_source_is_kept(self, command_handler, tmp_path):
+        present = tmp_path / "here.txt"
+        present.write_text("x")
+
+        result = command_handler._expand_source_wildcards([str(present)])
+
+        assert result == [str(present)]
+
+    def test_local_glob_matching_nothing_is_not_an_error(
+        self, command_handler, tmp_path
+    ):
+        """A wildcard matching nothing contributes nothing, as a shell does."""
+        pattern = str(tmp_path / "*.absent")
+
+        assert command_handler._expand_source_wildcards([pattern]) == []
+
+    def test_local_glob_expands_and_sorts(self, command_handler, tmp_path):
+        (tmp_path / "b.txt").write_text("b")
+        (tmp_path / "a.txt").write_text("a")
+
+        result = command_handler._expand_source_wildcards(
+            [str(tmp_path / "*.txt")]
+        )
+
+        assert [pathlib.Path(r).name for r in result] == ["a.txt", "b.txt"]
+
+    def test_recursive_listing_includes_empty_directories(
+        self, command_handler
+    ):
+        """A folder with no files must still appear in `ls -R`.
+
+        The tree builder only recorded entries of type "file", so an empty
+        directory vanished from the output entirely.
+        """
+        items = [
+            {
+                "name": "empty",
+                "type": "folder",
+                "dir": "/",
+                "path": "/empty",
+            },
+            {
+                "name": "a.txt",
+                "type": "file",
+                "dir": "/",
+                "path": "/a.txt",
+            },
+        ]
+
+        tree = command_handler._build_recursive_tree(items)
+
+        assert "/empty" in tree
+        assert tree["/empty"] == []
+        assert [i["name"] for i in tree["/"]] == ["a.txt"]
+
+    def test_sort_by_time_wins_over_sort_by_size(self, command_handler, mocker):
+        """-t and -S together: -t applies rather than being ignored."""
+        command_handler.client.list_folder.return_value = [
+            {
+                "name": "big_old.txt",
+                "type": "file",
+                "size": 900,
+                "modified": datetime(2020, 1, 1),
+            },
+            {
+                "name": "small_new.txt",
+                "type": "file",
+                "size": 1,
+                "modified": datetime(2024, 1, 1),
+            },
+        ]
+        mock_echo = mocker.patch("drobo.commands.click.echo")
+
+        command_handler.ls_with_options(
+            path="//", sort_by_size=True, sort_by_time=True
+        )
+
+        mock_echo.assert_has_calls(
+            [mocker.call("small_new.txt"), mocker.call("big_old.txt")],
+            any_order=False,
+        )
 
     def test_cp_recursive_flag(self, command_handler, mocker):
         """Test cp with -r flag for recursive directory copy."""

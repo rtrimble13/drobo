@@ -202,11 +202,17 @@ You can define multiple apps in the same file by using different app names.
 
 ### Logging
 
-Drobo logs all operations to `~/.drobo.log`. Use the verbose flag (`-v`) for more detailed output:
+Drobo logs all operations to `~/.drobo.log`. The file is rotated at 1 MB
+and five older copies are kept, so it will not grow without bound.
+
+Use the verbose flag (`-v`) for more detailed output:
 
 ```bash
 drobo -v myapp ls //
 ```
+
+`-v` raises the level for drobo's own logging only; it does not switch on
+debug output from the Dropbox SDK.
 
 ### Token Refresh
 
@@ -217,6 +223,17 @@ leave `access_token` empty and drobo will obtain one on first use.
 
 If refresh fails (for example the app's access was revoked), re-authorize
 with `drobo <app> auth`.
+
+### Large Files
+
+Files above 8 MB are uploaded in chunks using a Dropbox upload session,
+and downloads are streamed to disk. This removes the 150 MB ceiling that
+a single-request upload has, and keeps memory use bounded by the chunk
+size rather than the file size.
+
+Downloads are written to a temporary file next to the destination and
+renamed into place only once complete, so an interrupted download never
+damages an existing local file.
 
 ### Rate Limits and Transient Failures
 

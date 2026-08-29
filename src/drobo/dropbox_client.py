@@ -46,6 +46,13 @@ TRANSIENT_ERRORS = (
     TimeoutError,
 )
 
+# Transfer chunking.  files_upload is capped at 150 MB by Dropbox and
+# buffers the whole payload in memory; anything larger needs an upload
+# session.  Chunking well below the cap also keeps peak memory bounded and
+# gives a natural retry boundary.
+CHUNK_SIZE = 8 * 1024 * 1024
+UPLOAD_SESSION_THRESHOLD = CHUNK_SIZE
+
 # Scopes drobo needs to implement ls/cp/mv/rm.
 OAUTH_SCOPES = [
     "files.metadata.read",
@@ -317,7 +324,15 @@ class DropboxClient:
                     metadata, response = self._read(
                         self._client.files_download, remote_path
                     )
-                    f.write(response.content)
+                    # Stream rather than buffering the whole file; the SDK
+                    # opens download responses with stream=True and leaves
+                    # closing them to us.
+                    try:
+                        for chunk in response.iter_content(CHUNK_SIZE):
+                            if chunk:
+                                f.write(chunk)
+                    finally:
+                        response.close()
 
                 # mkstemp creates 0600; downloaded files should follow the
                 # user's umask the way a normal write would.
@@ -344,15 +359,26 @@ class DropboxClient:
             raise
 
     def upload_file(self, local_path: str, remote_path: str) -> None:
-        """Upload a file to Dropbox."""
+        """
+        Upload a file to Dropbox.
+
+        Small files go up in a single request.  Larger ones use an upload
+        session: files_upload is capped at 150 MB, and buffering a large
+        file entirely in memory is wasteful well before that.
+        """
         try:
+            size = os.path.getsize(local_path)
+
             with open(local_path, "rb") as f:
-                self._write(
-                    self._client.files_upload,
-                    f.read(),
-                    remote_path,
-                    mode=dropbox.files.WriteMode.overwrite,
-                )
+                if size <= UPLOAD_SESSION_THRESHOLD:
+                    self._write(
+                        self._client.files_upload,
+                        f.read(),
+                        remote_path,
+                        mode=dropbox.files.WriteMode.overwrite,
+                    )
+                else:
+                    self._upload_in_session(f, size, remote_path)
 
             logger.info(f"Uploaded {local_path} to {remote_path}")
 
@@ -363,6 +389,42 @@ class DropboxClient:
         except ApiError as e:
             logger.error(f"API error uploading file '{local_path}': {e}")
             raise
+
+    def _upload_in_session(self, f, size: int, remote_path: str) -> None:
+        """
+        Upload an already-open file in chunks via an upload session.
+
+        Offsets are taken from the file object itself rather than tracked
+        separately, so a short read cannot desynchronise the cursor from
+        what has actually been sent.
+        """
+        session = self._write(
+            self._client.files_upload_session_start, f.read(CHUNK_SIZE)
+        )
+        cursor = dropbox.files.UploadSessionCursor(
+            session_id=session.session_id, offset=f.tell()
+        )
+        commit = dropbox.files.CommitInfo(
+            path=remote_path, mode=dropbox.files.WriteMode.overwrite
+        )
+
+        while size - f.tell() > CHUNK_SIZE:
+            self._write(
+                self._client.files_upload_session_append_v2,
+                f.read(CHUNK_SIZE),
+                cursor,
+            )
+            cursor.offset = f.tell()
+            logger.debug(
+                f"Uploaded {cursor.offset} of {size} bytes to {remote_path}"
+            )
+
+        self._write(
+            self._client.files_upload_session_finish,
+            f.read(CHUNK_SIZE),
+            cursor,
+            commit,
+        )
 
     def copy_file(self, from_path: str, to_path: str) -> None:
         """Copy a file or folder."""

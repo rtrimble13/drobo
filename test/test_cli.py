@@ -2,6 +2,9 @@
 Tests for drobo CLI.
 """
 
+import logging
+import logging.handlers
+
 from click.testing import CliRunner
 
 from drobo.cli import cli
@@ -169,6 +172,62 @@ class TestCLI:
         assert mock_config_manager.call_count == 1
         # The same manager instance is handed to the command handler.
         assert mock_setup_commands.call_args.args[1] is mock_manager
+
+
+class TestLogging:
+    """Log configuration."""
+
+    def test_log_file_is_rotated(self, mocker, tmp_path):
+        """The log must not grow without bound."""
+        mocker.patch("drobo.cli.Path.home", return_value=tmp_path)
+        mock_basic = mocker.patch("drobo.cli.logging.basicConfig")
+
+        from drobo.cli import setup_logging
+
+        setup_logging(verbose=False)
+
+        handlers = mock_basic.call_args.kwargs["handlers"]
+        rotating = [
+            h
+            for h in handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(rotating) == 1
+        assert rotating[0].maxBytes > 0
+        assert rotating[0].backupCount > 0
+
+    def test_verbose_does_not_turn_on_third_party_debug_logging(
+        self, mocker, tmp_path
+    ):
+        """--verbose must scope to drobo, not the root logger.
+
+        Turning the root logger to DEBUG also switches on the Dropbox SDK
+        and urllib3, which is noisy and puts request detail in the log file.
+        """
+        mocker.patch("drobo.cli.Path.home", return_value=tmp_path)
+        mocker.patch("drobo.cli.logging.basicConfig")
+
+        from drobo.cli import setup_logging
+
+        setup_logging(verbose=True)
+
+        assert logging.getLogger("drobo").level == logging.DEBUG
+        assert logging.getLogger("urllib3").level != logging.DEBUG
+
+    def test_unwritable_home_does_not_break_the_cli(self, mocker):
+        """A read-only home should not stop drobo from running."""
+        mocker.patch(
+            "drobo.cli.logging.handlers.RotatingFileHandler",
+            side_effect=OSError("read-only file system"),
+        )
+        mock_basic = mocker.patch("drobo.cli.logging.basicConfig")
+
+        from drobo.cli import setup_logging
+
+        setup_logging(verbose=False)
+
+        handlers = mock_basic.call_args.kwargs["handlers"]
+        assert len(handlers) == 1  # stdout only
 
 
 class TestAuthCommand:

@@ -3,6 +3,7 @@ Main CLI module for drobo.
 """
 
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -13,20 +14,41 @@ from drobo.commands import setup_commands
 from drobo.config import ConfigManager
 from drobo.dropbox_client import DroboAuthError, authorize_interactive
 
+# Keep at most ~5 MB of history rather than growing without bound.
+LOG_MAX_BYTES = 1024 * 1024
+LOG_BACKUP_COUNT = 5
+
 
 def setup_logging(verbose: bool = False) -> None:
-    """Setup logging configuration."""
-    level = logging.DEBUG if verbose else logging.ERROR
+    """
+    Setup logging configuration.
+
+    Verbosity is applied to drobo's own logger rather than the root, so
+    --verbose does not also switch on debug output from the Dropbox SDK
+    and urllib3 (which is noisy and can echo request details into the log
+    file).
+    """
     format_str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    handlers = [logging.StreamHandler(sys.stdout)]
+
+    try:
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                Path.home() / ".drobo.log",
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+            )
+        )
+    except OSError:
+        # A read-only or missing home directory should not stop the CLI.
+        pass
 
     logging.basicConfig(
-        level=level,
-        format=format_str,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(Path.home() / ".drobo.log"),
-        ],
+        level=logging.ERROR, format=format_str, handlers=handlers
     )
+
+    if verbose:
+        logging.getLogger("drobo").setLevel(logging.DEBUG)
 
 
 def print_version(ctx, param, value):

@@ -6,6 +6,7 @@ import fnmatch
 import glob
 import logging
 import os
+import posixpath
 import re
 from datetime import datetime
 from typing import List
@@ -27,12 +28,17 @@ def _normalize_remote_path(path: str) -> str:
     """
     Convert remote path from // prefix to Dropbox API format.
     Dropbox API paths start with / and do not have // prefix.
+
+    Remote paths are POSIX-shaped whatever the host OS is, so this uses
+    posixpath rather than os.path -- on Windows the latter would hand back
+    backslash separators and corrupt the path. posixpath.normpath is also
+    independent of the working directory, which os.path.abspath is not.
     """
     if not path or path == "//":
         return "//"  # root path
 
     # format with // prefix
-    normalized_path = os.path.abspath("//" + re.sub(r"^/+", "", path))
+    normalized_path = posixpath.normpath("//" + re.sub(r"^/+", "", path))
     return normalized_path
 
 
@@ -132,7 +138,7 @@ class CommandHandler:
 
         # check for wildcards in the last path component
         if _has_wildcards(path):
-            path, mask = os.path.split(path)
+            path, mask = posixpath.split(path)
 
         try:
             # Fetch items from remote
@@ -147,8 +153,10 @@ class CommandHandler:
 
             else:
 
-                # Apply sorting
-                if sort_by_size:
+                # Apply sorting.  GNU ls lets the last of -S/-t win; click
+                # cannot tell us the order, so -t takes precedence as the
+                # more specific request.
+                if sort_by_size and not sort_by_time:
                     items = sorted(
                         items, key=lambda x: x.get("size", 0), reverse=True
                     )
@@ -172,14 +180,23 @@ class CommandHandler:
             raise
 
     def _build_recursive_tree(self, items: List[dict]) -> dict:
-        """Build a tree structure for recursive listing."""
+        """
+        Build a tree structure for recursive listing.
+
+        Folders get an entry of their own as well as being grouped under
+        their parent, so a directory containing no files is still listed
+        rather than vanishing from the output.
+        """
         tree = {}
         for item in items:
             dir_path = item["dir"] if item["dir"] else "/"
-            if dir_path not in tree:
-                tree[dir_path] = []
+            tree.setdefault(dir_path, [])
+
             if item["type"] == "file":
                 tree[dir_path].append(item)
+            else:
+                # Ensure the folder itself appears, even when empty.
+                tree.setdefault(item["path"], [])
         return tree
 
     def cp_with_options(
@@ -285,13 +302,13 @@ class CommandHandler:
             raise click.ClickException("mv: no files matched")
 
         # Validate all sources are either remote or local
-        self._validate_source_consistency(expanded_sources)
+        self._validate_source_consistency(expanded_sources, "mv")
 
         # Check if we need to validate destination directory existence
         # (when moving multiple files, destination must be a directory)
         if len(expanded_sources) > 1:
             self._validate_destination_for_multiple_files(
-                expanded_sources, destination, False
+                expanded_sources, destination, False, "mv"
             )
 
         # Perform the move operations
@@ -324,18 +341,19 @@ class CommandHandler:
         else:
             dest_path = _normalize_local_path(destination)
 
-        # If destination is a directory, move file into it
-        if source_is_remote and dest_is_remote:
+        # If destination is a directory, move file into it.  The basename
+        # comes from whichever flavour of path the source is.
+        filename = (
+            posixpath.basename(source_path)
+            if source_is_remote
+            else os.path.basename(source_path)
+        )
+
+        if dest_is_remote:
             if self._is_remote_directory(dest_path):
-                filename = os.path.basename(source_path)
-                dest_path = os.path.join(dest_path, filename)
-        elif dest_is_remote:
-            if self._is_remote_directory(dest_path):
-                filename = os.path.basename(source_path)
-                dest_path = os.path.join(dest_path, filename)
-        elif not dest_is_remote:
+                dest_path = posixpath.join(dest_path, filename)
+        else:
             if os.path.isdir(dest_path):
-                filename = os.path.basename(source_path)
                 dest_path = os.path.join(dest_path, filename)
 
         # Check if destination exists and handle force/update flags
@@ -500,7 +518,7 @@ class CommandHandler:
     def _print_recursive_format(self, items: dict) -> None:
         """Print items in recursive format."""
         for dir_path in sorted(items.keys()):
-            dir_name = os.path.basename(dir_path) if dir_path != "/" else "/"
+            dir_name = posixpath.basename(dir_path) if dir_path != "/" else "/"
             space = " | " * (dir_path.count("/") - 1)
             click.echo(f"{space}{dir_name}:")
             dir_items = items[dir_path]
@@ -533,7 +551,7 @@ class CommandHandler:
                 if _has_wildcards(path):
                     # List files in the directory and filter by mask
                     try:
-                        dir_name, mask = os.path.split(path[1:])
+                        dir_name, mask = posixpath.split(path[1:])
                         items = self._filter_remote_paths(
                             self.client.list_folder(dir_name), mask
                         )
@@ -551,13 +569,26 @@ class CommandHandler:
                     expanded.append(source)
             else:
                 # expand local sources
-                matches = glob.glob(source)
-                if matches:
-                    expanded.extend(matches)
+                if _has_wildcards(source):
+                    # A glob that matches nothing is not an error; it simply
+                    # contributes no sources, as the shell would do.
+                    expanded.extend(sorted(glob.glob(source)))
+                else:
+                    # A literal path that is absent is an error worth
+                    # naming, rather than being silently dropped and
+                    # reported later as "no files matched".
+                    if not os.path.exists(_normalize_local_path(source)):
+                        raise ValueError(
+                            f"cannot stat '{source}': "
+                            "No such file or directory"
+                        )
+                    expanded.append(source)
 
         return expanded
 
-    def _validate_source_consistency(self, sources: list) -> None:
+    def _validate_source_consistency(
+        self, sources: list, command: str = "cp"
+    ) -> None:
         """Validate that all sources are either remote or local."""
         if not sources:
             return
@@ -565,10 +596,16 @@ class CommandHandler:
         first_is_remote = _is_remote_path(sources[0])
         for source in sources[1:]:
             if _is_remote_path(source) != first_is_remote:
-                raise ValueError("cp: cannot mix remote and local source files")
+                raise ValueError(
+                    f"{command}: cannot mix remote and local source files"
+                )
 
     def _validate_destination_for_multiple_files(
-        self, sources: list, destination: str, recursive: bool
+        self,
+        sources: list,
+        destination: str,
+        recursive: bool,
+        command: str = "cp",
     ) -> None:
         """Validate destination when copying multiple files."""
         dest_is_remote = _is_remote_path(destination)
@@ -576,17 +613,16 @@ class CommandHandler:
         if dest_is_remote:
             # Check if remote destination is a directory
             dest_path = _normalize_remote_path(destination)
-            if not self._is_remote_directory(dest_path[1:]):
-                raise ValueError(
-                    f"cp: target '{destination}' is not a directory"
-                )
+            is_dir = self._is_remote_directory(dest_path[1:])
         else:
             # Check if local destination is a directory
             dest_path = _normalize_local_path(destination)
-            if not os.path.isdir(dest_path):
-                raise ValueError(
-                    f"cp: target '{destination}' is not a directory"
-                )
+            is_dir = os.path.isdir(dest_path)
+
+        if not is_dir:
+            raise ValueError(
+                f"{command}: target '{destination}' is not a directory"
+            )
 
     def _copy_file_or_folder(
         self,
@@ -663,9 +699,9 @@ class CommandHandler:
                 # Copy to specific file path
                 self.client.upload_file(source, destination)
             else:
-                # Copy into directory
+                # Copy into directory (destination is remote)
                 filename = os.path.basename(source)
-                dest_file = os.path.join(destination, filename)
+                dest_file = posixpath.join(destination, filename)
                 self.client.upload_file(source, dest_file)
         elif os.path.isdir(source):
             if not recursive:
@@ -695,7 +731,7 @@ class CommandHandler:
             else:
                 # If destination is a directory, copy into it
                 if os.path.isdir(destination):
-                    filename = os.path.basename(source)
+                    filename = posixpath.basename(source)
                     dest_file = os.path.join(destination, filename)
                     self.client.download_file(source, dest_file)
                 else:
@@ -706,7 +742,7 @@ class CommandHandler:
                     f"'{source}' is a directory (use -r for recursive copy)"
                 )
             # Handle directory copy based on use case 2
-            source_dir_name = os.path.basename(source.rstrip("/"))
+            source_dir_name = posixpath.basename(source.rstrip("/"))
             if os.path.exists(destination):
                 # Destination exists, create subdirectory with source's name
                 actual_dest = os.path.join(destination, source_dir_name)
@@ -735,9 +771,9 @@ class CommandHandler:
                 # Copy to specific file path
                 self.client.copy_file(source, destination)
             else:
-                # Copy into directory
-                filename = os.path.basename(source)
-                dest_file = os.path.join(destination, filename)
+                # Copy into directory (both sides remote)
+                filename = posixpath.basename(source)
+                dest_file = posixpath.join(destination, filename)
                 self.client.copy_file(source, dest_file)
         elif metadata.get("type") == "folder":
             if not recursive:
@@ -786,12 +822,6 @@ class CommandHandler:
                 remote_subdir = item["path"]
                 self._download_directory_contents(remote_subdir, local_subdir)
 
-    def _download_directory_recursive(
-        self, remote_dir: str, local_base: str
-    ) -> None:
-        """Download a directory recursively (legacy wrapper)."""
-        self._download_directory_contents(remote_dir, local_base)
-
     def _copy_directory_recursive_remote(
         self, remote_source: str, remote_dest: str
     ) -> None:
@@ -818,9 +848,7 @@ class CommandHandler:
         )
         # get the base directory name to create under remote_base
         target_dir_name = os.path.basename(os.path.normpath(local_dir))
-        remote_base = os.path.join(remote_base, target_dir_name).replace(
-            "\\", "/"
-        )
+        remote_base = posixpath.join(remote_base, target_dir_name)
 
         if not self._is_remote_directory(remote_base):
             self.client.create_folder(remote_base)
@@ -832,8 +860,10 @@ class CommandHandler:
                 rel_dir = os.path.relpath(
                     os.path.join(root, dir_name), local_dir
                 )
-                remote_subdir = os.path.join(remote_base, rel_dir).replace(
-                    "\\", "/"
+                # rel_dir comes from the local filesystem, so normalise
+                # its separators before using it as a remote path.
+                remote_subdir = posixpath.join(
+                    remote_base, rel_dir.replace(os.sep, "/")
                 )
                 if not self._is_remote_directory(remote_subdir):
                     self.client.create_folder(remote_subdir)
@@ -842,8 +872,8 @@ class CommandHandler:
             for file in files:
                 local_file_path = os.path.join(root, file)
                 relative_path = os.path.relpath(local_file_path, local_dir)
-                remote_path = os.path.join(remote_base, relative_path).replace(
-                    "\\", "/"
+                remote_path = posixpath.join(
+                    remote_base, relative_path.replace(os.sep, "/")
                 )
                 self.client.upload_file(local_file_path, remote_path)
 

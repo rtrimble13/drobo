@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 from unittest.mock import Mock, patch
 
+import dropbox
 import pytest
 import requests
 from dropbox.exceptions import AuthError, RateLimitError
@@ -72,14 +73,30 @@ class TestDownloadFile:
         dest = tmp_path / "out.txt"
 
         client = _client()
-        response = Mock()
-        response.content = b"hello from dropbox"
+        response = _streaming_response(b"hello from dropbox")
         client._client.files_download.return_value = (Mock(), response)
 
         client.download_file("/remote.txt", str(dest))
 
         assert dest.read_bytes() == b"hello from dropbox"
         assert [p.name for p in tmp_path.iterdir()] == ["out.txt"]
+        # The caller owns the streamed response and must close it.
+        response.close.assert_called_once()
+
+    def test_large_download_is_streamed_in_chunks(self, tmp_path):
+        """A big download must not be buffered whole in memory."""
+        dest = tmp_path / "big.bin"
+        payload = b"x" * (3 * 1024)
+
+        client = _client()
+        response = _streaming_response(payload, chunks=3)
+        client._client.files_download.return_value = (Mock(), response)
+
+        client.download_file("/big.bin", str(dest))
+
+        assert dest.read_bytes() == payload
+        # Consumed via iter_content, never via .content
+        response.iter_content.assert_called_once()
 
     def test_successful_download_overwrites_existing_file(self, tmp_path):
         """Overwriting on success still works."""
@@ -87,8 +104,7 @@ class TestDownloadFile:
         dest.write_text("old contents")
 
         client = _client()
-        response = Mock()
-        response.content = b"new contents"
+        response = _streaming_response(b"new contents")
         client._client.files_download.return_value = (Mock(), response)
 
         client.download_file("/remote.txt", str(dest))
@@ -100,8 +116,7 @@ class TestDownloadFile:
         dest = tmp_path / "out.txt"
 
         client = _client()
-        response = Mock()
-        response.content = b"data"
+        response = _streaming_response(b"data")
         client._client.files_download.return_value = (Mock(), response)
 
         old_umask = os.umask(0o022)
@@ -111,6 +126,23 @@ class TestDownloadFile:
             os.umask(old_umask)
 
         assert oct(dest.stat().st_mode & 0o777) == oct(0o644)
+
+
+def _streaming_response(payload: bytes, chunks: int = 1) -> Mock:
+    """Model a streamed download response.
+
+    The SDK opens download routes with stream=True and leaves closing the
+    response to the caller, so iter_content is what the client consumes.
+    """
+    size = max(1, -(-len(payload) // chunks))
+    parts = []
+    for start in range(0, len(payload), size):
+        parts.append(payload[start:][:size])
+    if not parts:
+        parts = [b""]
+    response = Mock()
+    response.iter_content.return_value = iter(parts)
+    return response
 
 
 def _app_config(**overrides) -> AppConfig:
@@ -399,7 +431,6 @@ class TestFileOperations:
 
         This is deliberate: autorename would silently produce "file (1)".
         """
-        import dropbox
         from dropbox.exceptions import ApiError
 
         client = _client()
@@ -417,7 +448,6 @@ class TestFileOperations:
         assert client._client.files_copy_v2.call_count == 2
 
     def test_copy_reports_a_missing_source_as_file_not_found(self):
-        import dropbox
         from dropbox.exceptions import ApiError
 
         client = _client()
@@ -613,3 +643,119 @@ class TestRetryPolicy:
 
         assert client._client.files_get_metadata.call_count == 1
         assert no_real_sleeping == []
+
+
+class TestChunkedUpload:
+    """Large uploads go through an upload session.
+
+    files_upload is capped at 150 MB by Dropbox, so anything larger has to
+    be chunked. The offsets are the risky part: getting them wrong corrupts
+    the upload silently rather than failing, so they are asserted directly.
+    """
+
+    def _small_client(self, monkeypatch, chunk=16):
+        """Shrink the chunk size so tests stay fast and readable."""
+        monkeypatch.setattr("drobo.dropbox_client.CHUNK_SIZE", chunk)
+        monkeypatch.setattr(
+            "drobo.dropbox_client.UPLOAD_SESSION_THRESHOLD", chunk
+        )
+        client = _client()
+        client._client.files_upload_session_start.return_value = Mock(
+            session_id="session-1"
+        )
+        return client
+
+    def test_small_file_uses_a_single_request(self, tmp_path, monkeypatch):
+        client = self._small_client(monkeypatch)
+        source = tmp_path / "small.bin"
+        source.write_bytes(b"a" * 10)
+
+        client.upload_file(str(source), "/small.bin")
+
+        client._client.files_upload.assert_called_once()
+        client._client.files_upload_session_start.assert_not_called()
+
+    def test_file_exactly_at_the_threshold_uses_a_single_request(
+        self, tmp_path, monkeypatch
+    ):
+        """The boundary is inclusive; only larger files need a session."""
+        client = self._small_client(monkeypatch, chunk=16)
+        source = tmp_path / "edge.bin"
+        source.write_bytes(b"a" * 16)
+
+        client.upload_file(str(source), "/edge.bin")
+
+        client._client.files_upload.assert_called_once()
+        client._client.files_upload_session_start.assert_not_called()
+
+    def test_large_file_is_uploaded_in_a_session(self, tmp_path, monkeypatch):
+        client = self._small_client(monkeypatch, chunk=16)
+        payload = bytes(range(64))  # 64 bytes = 4 chunks of 16
+        source = tmp_path / "big.bin"
+        source.write_bytes(payload)
+
+        client.upload_file(str(source), "/big.bin")
+
+        client._client.files_upload.assert_not_called()
+        client._client.files_upload_session_start.assert_called_once()
+
+        # start(16) + append(16) + append(16) + finish(16) == 64 bytes
+        sent = client._client.files_upload_session_start.call_args.args[0]
+        for (
+            call
+        ) in client._client.files_upload_session_append_v2.call_args_list:
+            sent += call.args[0]
+        sent += client._client.files_upload_session_finish.call_args.args[0]
+
+        assert sent == payload, "reassembled upload must match the source"
+
+    def test_session_cursor_offsets_advance_correctly(
+        self, tmp_path, monkeypatch
+    ):
+        """Each append must be told the offset it is writing at."""
+        client = self._small_client(monkeypatch, chunk=16)
+        source = tmp_path / "big.bin"
+        source.write_bytes(b"a" * 64)
+
+        offsets = []
+        client._client.files_upload_session_append_v2.side_effect = (
+            lambda data, cursor: offsets.append(cursor.offset)
+        )
+
+        client.upload_file(str(source), "/big.bin")
+
+        # start consumes 0-16, so the appends land at 16 and 32; the final
+        # 16 bytes go to finish.
+        assert offsets == [16, 32]
+
+    def test_session_commits_to_the_right_path_and_overwrites(
+        self, tmp_path, monkeypatch
+    ):
+        client = self._small_client(monkeypatch, chunk=16)
+        source = tmp_path / "big.bin"
+        source.write_bytes(b"a" * 40)
+
+        client.upload_file(str(source), "/remote/big.bin")
+
+        commit = client._client.files_upload_session_finish.call_args.args[2]
+        assert commit.path == "/remote/big.bin"
+        assert commit.mode == dropbox.files.WriteMode.overwrite
+
+    def test_uneven_final_chunk_is_handled(self, tmp_path, monkeypatch):
+        """A file that is not a whole multiple of the chunk size."""
+        client = self._small_client(monkeypatch, chunk=16)
+        payload = b"b" * 37  # 16 + 16 + 5
+        source = tmp_path / "odd.bin"
+        source.write_bytes(payload)
+
+        client.upload_file(str(source), "/odd.bin")
+
+        sent = client._client.files_upload_session_start.call_args.args[0]
+        for (
+            call
+        ) in client._client.files_upload_session_append_v2.call_args_list:
+            sent += call.args[0]
+        sent += client._client.files_upload_session_finish.call_args.args[0]
+
+        assert sent == payload
+        assert len(sent) == 37
