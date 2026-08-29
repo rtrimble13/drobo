@@ -3,6 +3,7 @@ Main CLI module for drobo.
 """
 
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -11,21 +12,43 @@ import click
 from drobo import __version__
 from drobo.commands import setup_commands
 from drobo.config import ConfigManager
+from drobo.dropbox_client import DroboAuthError, authorize_interactive
+
+# Keep at most ~5 MB of history rather than growing without bound.
+LOG_MAX_BYTES = 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
 
 def setup_logging(verbose: bool = False) -> None:
-    """Setup logging configuration."""
-    level = logging.DEBUG if verbose else logging.ERROR
+    """
+    Setup logging configuration.
+
+    Verbosity is applied to drobo's own logger rather than the root, so
+    --verbose does not also switch on debug output from the Dropbox SDK
+    and urllib3 (which is noisy and can echo request details into the log
+    file).
+    """
     format_str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    handlers = [logging.StreamHandler(sys.stdout)]
+
+    try:
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                Path.home() / ".drobo.log",
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+            )
+        )
+    except OSError:
+        # A read-only or missing home directory should not stop the CLI.
+        pass
 
     logging.basicConfig(
-        level=level,
-        format=format_str,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(Path.home() / ".drobo.log"),
-        ],
+        level=logging.ERROR, format=format_str, handlers=handlers
     )
+
+    if verbose:
+        logging.getLogger("drobo").setLevel(logging.DEBUG)
 
 
 def print_version(ctx, param, value):
@@ -40,6 +63,12 @@ def print_version(ctx, param, value):
 @click.argument("app_name")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option(
+    "--config",
+    "config_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Path to the configuration file (default: ~/.droborc)",
+)
+@click.option(
     "--version",
     is_flag=True,
     expose_value=False,
@@ -48,7 +77,7 @@ def print_version(ctx, param, value):
     help="Show version and exit",
 )
 @click.pass_context
-def cli(ctx, app_name: str, verbose: bool) -> None:
+def cli(ctx, app_name: str, verbose: bool, config_path: Path) -> None:
     """
     Drobo - A Dropbox CLI
 
@@ -62,13 +91,21 @@ def cli(ctx, app_name: str, verbose: bool) -> None:
     ctx.ensure_object(dict)
     ctx.obj["app_name"] = app_name
     ctx.obj["verbose"] = verbose
+    ctx.obj["config_path"] = config_path
+
+
+def get_config_manager(ctx) -> ConfigManager:
+    """Get the run's ConfigManager, creating it once per invocation."""
+    if "config_manager" not in ctx.obj:
+        ctx.obj["config_manager"] = ConfigManager(ctx.obj.get("config_path"))
+    return ctx.obj["config_manager"]
 
 
 def get_command_handler(ctx):
     """Get command handler, initializing if needed."""
     if "command_handler" not in ctx.obj:
         try:
-            config_manager = ConfigManager()
+            config_manager = get_config_manager(ctx)
             app_config = config_manager.get_app_config(ctx.obj["app_name"])
 
             if not app_config:
@@ -78,9 +115,10 @@ def get_command_handler(ctx):
                 )
                 sys.exit(1)
 
-            # Setup the command handler
+            # Setup the command handler, sharing the one config manager so
+            # that token writes update the config the client is using.
             ctx.obj["command_handler"] = setup_commands(
-                app_config, ctx.obj["verbose"]
+                app_config, config_manager, ctx.obj["verbose"]
             )
         except Exception as e:
             logging.error(f"Command failed: {e}")
@@ -93,7 +131,7 @@ def get_command_handler(ctx):
 
 
 @cli.command()
-@click.argument("path", default="/")
+@click.argument("path", default="//")
 @click.option(
     "-l", "long_format", is_flag=True, help="use a long listing format"
 )
@@ -291,6 +329,43 @@ def rm(ctx, sources: tuple, force: bool, recursive: bool) -> None:
         if ctx.obj.get("verbose"):
             raise
         click.echo(f"rm: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.pass_context
+def auth(ctx) -> None:
+    """Authorize this app and store the resulting tokens.
+
+    Opens the Dropbox OAuth flow, then writes the access and refresh
+    tokens into the configuration file. Requires an interactive terminal.
+
+    Usage:
+    drobo <app name> auth
+    """
+    try:
+        config_manager = get_config_manager(ctx)
+        app_name = ctx.obj["app_name"]
+        app_config = config_manager.get_app_config(app_name)
+
+        if not app_config:
+            click.echo(
+                f"Error: App '{app_name}' not found in .droborc", err=True
+            )
+            sys.exit(1)
+
+        access_token, refresh_token = authorize_interactive(app_config)
+        config_manager.save_app_tokens(app_name, access_token, refresh_token)
+        click.echo(f"Authorized '{app_name}' and saved tokens.")
+    except DroboAuthError as e:
+        logging.error(f"auth command failed: {e}")
+        click.echo(f"auth: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        logging.error(f"auth command failed: {e}")
+        if ctx.obj.get("verbose"):
+            raise
+        click.echo(f"auth: {e}", err=True)
         sys.exit(1)
 
 

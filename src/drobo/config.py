@@ -3,6 +3,8 @@ Configuration management for drobo.
 """
 
 import logging
+import os
+import stat
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -34,8 +36,14 @@ class AppConfig:
             )
 
     def has_valid_tokens(self) -> bool:
-        """Check if the app has valid access tokens."""
-        return bool(self.access_token)
+        """
+        Check whether the app has credentials the client can use.
+
+        A refresh token alone is sufficient: given app_key and app_secret,
+        the SDK mints an access token on demand.  Requiring a stored access
+        token would reject the more secure configuration.
+        """
+        return bool(self.access_token or self.refresh_token)
 
     def update_tokens(
         self, access_token: str, refresh_token: str = None
@@ -44,6 +52,11 @@ class AppConfig:
         self.access_token = access_token
         if refresh_token:
             self.refresh_token = refresh_token
+
+
+# The config file holds app secrets and refresh tokens; keep it private,
+# the way ssh, aws and netrc do.
+_CONFIG_MODE = stat.S_IRUSR | stat.S_IWUSR  # 0600
 
 
 class ConfigManager:
@@ -66,6 +79,8 @@ class ConfigManager:
             # Reload after creating default config
             return self._load_config()
 
+        self._warn_if_permissive()
+
         try:
             self._config.load(self.config_path)
 
@@ -84,6 +99,30 @@ class ConfigManager:
             logger.error(f"Failed to load config from {self.config_path}: {e}")
             raise
 
+    def _warn_if_permissive(self) -> None:
+        """Warn when the config is readable by users other than the owner."""
+        try:
+            mode = stat.S_IMODE(self.config_path.stat().st_mode)
+        except OSError:
+            return
+
+        if mode & (stat.S_IRWXG | stat.S_IRWXO):
+            logger.warning(
+                f"{self.config_path} is accessible by other users "
+                f"(mode {oct(mode)}); it contains app secrets and tokens. "
+                f"Run: chmod 600 {self.config_path}"
+            )
+
+    def _secure_config_file(self) -> None:
+        """Restrict the config file to the owner."""
+        try:
+            os.chmod(self.config_path, _CONFIG_MODE)
+        except OSError as e:
+            # Not fatal -- some filesystems (and Windows) do not support it.
+            logger.warning(
+                f"Could not restrict permissions on {self.config_path}: {e}"
+            )
+
     def _create_default_config(self) -> None:
         """Create a default configuration file."""
         # Set default configuration using configistate
@@ -96,6 +135,7 @@ class ConfigManager:
 
         try:
             self._config.save(self.config_path)
+            self._secure_config_file()
             logger.info(f"Created default config at {self.config_path}")
         except Exception as e:
             logger.error(f"Failed to create default config: {e}")
@@ -128,6 +168,7 @@ class ConfigManager:
                 )
 
             self._config.save(self.config_path)
+            self._secure_config_file()
             logger.info(f"Updated tokens for app '{app_name}'")
 
         except Exception as e:

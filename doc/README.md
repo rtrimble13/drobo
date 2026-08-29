@@ -22,14 +22,35 @@ Drobo is a command-line interface for Dropbox that mimics traditional Unix file 
    # Edit ~/.droborc with your app credentials
    ```
 
-3. **Obtain Access Tokens**: Use the Dropbox OAuth flow to obtain access and refresh tokens for your app.
+3. **Obtain Access Tokens**: Run `drobo <app> auth`. This opens the Dropbox
+   OAuth flow, asks you to paste back an authorization code, and writes the
+   resulting access and refresh tokens into your configuration file. It needs
+   an interactive terminal.
+
+   Once a refresh token is stored, drobo renews the access token on its own --
+   you should not need to run `auth` again unless access is revoked.
 
 4. **Start Using drobo**: Once configured, you can start using drobo commands:
    ```bash
-   drobo myapp ls /
+   drobo myapp ls //
    ```
 
 ## Command Reference
+
+### auth - Authorize an App
+
+```bash
+drobo <app> auth
+```
+
+Runs the Dropbox OAuth flow for the named app and stores the returned access
+and refresh tokens in the configuration file. Requires an interactive
+terminal; it will refuse to run (rather than hang) when stdin is not a TTY,
+so it is safe to invoke from scripts that may not have one.
+
+```bash
+drobo myapp auth
+```
 
 ### ls - List Directory Contents
 
@@ -38,8 +59,6 @@ drobo <app> ls [options] [path]
 ```
 
 Options:
-- `-a, --all`: do not ignore entries starting with '.'
-- `-d, --directory`: list directories themselves, not their contents
 - `-l`: use a long listing format
 - `-r, --reverse`: reverse order while sorting
 - `-R, --recursive`: list subdirectories recursively
@@ -48,12 +67,11 @@ Options:
 
 Examples:
 ```bash
-drobo myapp ls /
-drobo myapp ls -l /Documents
-drobo myapp ls -la /
-drobo myapp ls -altr /Documents  # all files, long format, sorted by time, reversed
-drobo myapp ls -R /               # recursive listing
-drobo myapp ls -S /Documents      # sort by file size
+drobo myapp ls //                 # list the remote root
+drobo myapp ls -l //Documents     # long format
+drobo myapp ls -ltr //Documents   # long format, sorted by time, reversed
+drobo myapp ls -R //              # recursive listing
+drobo myapp ls -S //Documents     # sort by file size
 ```
 
 ### cp - Copy Files
@@ -107,16 +125,32 @@ drobo myapp cp -T //source/file.txt //dest_file.txt
 ### mv - Move/Rename Files
 
 ```bash
-drobo <app> mv <source> <destination>
+drobo <app> mv [options] SOURCE ... DEST
+drobo <app> mv [options] -t DIRECTORY SOURCE ...
 ```
+
+Options:
+- `-f, --force`: do not raise an error if the destination file already exists
+- `-u, --update`: move only when SOURCE is newer than the destination, or the
+  destination is missing
+- `-t, --target-directory=DIRECTORY`: move all SOURCE arguments into DIRECTORY
 
 Examples:
 ```bash
 # Rename file in Dropbox
-drobo myapp mv /old_name.txt /new_name.txt
+drobo myapp mv //old_name.txt //new_name.txt
 
-# Move file to different directory
-drobo myapp mv /file.txt /subfolder/file.txt
+# Move file to a different directory
+drobo myapp mv //file.txt //subfolder/file.txt
+
+# Move multiple files into a directory
+drobo myapp mv -t //documents //file1.txt //file2.txt
+
+# Overwrite an existing destination
+drobo myapp mv -f //source.txt //existing_dest.txt
+
+# Move only if the source is newer
+drobo myapp mv -u //source.txt //dest.txt
 ```
 
 ### rm - Remove Files
@@ -126,18 +160,22 @@ drobo <app> rm [options] <file1> [file2 ...]
 ```
 
 Options:
-- `-f`: Force removal (ignore errors)
+- `-f, --force`: ignore nonexistent files and arguments, never prompt
+- `-r, --recursive`: remove directories and their contents recursively
 
 Examples:
 ```bash
 # Remove single file
-drobo myapp rm /unwanted_file.txt
+drobo myapp rm //unwanted_file.txt
 
 # Remove multiple files
-drobo myapp rm /file1.txt /file2.txt
+drobo myapp rm //file1.txt //file2.txt
 
 # Force remove (ignore errors)
-drobo myapp rm -f /might_not_exist.txt
+drobo myapp rm -f //might_not_exist.txt
+
+# Remove a directory and its contents
+drobo myapp rm -r //directory
 ```
 
 ## Configuration File Format
@@ -164,12 +202,56 @@ You can define multiple apps in the same file by using different app names.
 
 ### Logging
 
-Drobo logs all operations to `~/.drobo.log`. Use the verbose flag (`-v`) for more detailed output:
+Drobo logs all operations to `~/.drobo.log`. The file is rotated at 1 MB
+and five older copies are kept, so it will not grow without bound.
+
+Use the verbose flag (`-v`) for more detailed output:
 
 ```bash
-drobo -v myapp ls /
+drobo -v myapp ls //
 ```
+
+`-v` raises the level for drobo's own logging only; it does not switch on
+debug output from the Dropbox SDK.
 
 ### Token Refresh
 
-If your access token expires, drobo will attempt to refresh it automatically using the refresh token. Ensure your refresh token is valid and stored in the configuration file.
+If your access token expires, drobo refreshes it automatically using the
+stored refresh token -- no interaction is required, so this works from cron
+and scripts. A refresh token on its own is a complete credential: you may
+leave `access_token` empty and drobo will obtain one on first use.
+
+If refresh fails (for example the app's access was revoked), re-authorize
+with `drobo <app> auth`.
+
+### Large Files
+
+Files above 8 MB are uploaded in chunks using a Dropbox upload session,
+and downloads are streamed to disk. This removes the 150 MB ceiling that
+a single-request upload has, and keeps memory use bounded by the chunk
+size rather than the file size.
+
+Downloads are written to a temporary file next to the destination and
+renamed into place only once complete, so an interrupted download never
+damages an existing local file.
+
+### Rate Limits and Transient Failures
+
+Bulk operations (a recursive `cp` of a large tree) issue many sequential API
+calls and can draw Dropbox rate limits. drobo retries these automatically
+with exponential backoff, honouring the delay Dropbox asks for. Run with
+`-v` to see retries as they happen.
+
+Read operations also retry transient network errors. Write operations retry
+rate limits only -- a dropped connection on a write may already have been
+applied server-side, so repeating it blindly is not safe.
+
+Errors that will not fix themselves (a missing file, a bad path, an expired
+token) are reported immediately rather than retried.
+
+### Configuration File Permissions
+
+The configuration file holds your app secret and refresh token, so drobo
+creates it with mode `0600` (owner read/write only) and keeps it that way
+when saving tokens. If an existing file is readable by other users, drobo
+warns on startup; fix it with `chmod 600 ~/.droborc`.
